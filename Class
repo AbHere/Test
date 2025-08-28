@@ -1,0 +1,604 @@
+TiersControl.Designer.cs
+// TiersControl.Designer.cs
+using System.Windows.Forms;
+
+namespace YourApp.Controls
+{
+    partial class TiersControl
+    {
+        private System.ComponentModel.IContainer components = null;
+
+        private Panel panelTop;
+        private Button btnUpload;
+        private TextBox txtFilePath;
+        private Label lblFilePath;
+        private Button btnSave;
+        private DataGridView dataGridView1;
+
+        private DataGridViewTextBoxColumn colMnemonic;
+        private DataGridViewTextBoxColumn colComment;
+        private DataGridViewTextBoxColumn colName;
+        private DataGridViewTextBoxColumn colType;
+        private DataGridViewTextBoxColumn colStatus;
+        private DataGridViewTextBoxColumn colIndent;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            this.panelTop = new System.Windows.Forms.Panel();
+            this.btnSave = new System.Windows.Forms.Button();
+            this.txtFilePath = new System.Windows.Forms.TextBox();
+            this.lblFilePath = new System.Windows.Forms.Label();
+            this.btnUpload = new System.Windows.Forms.Button();
+            this.dataGridView1 = new System.Windows.Forms.DataGridView();
+            this.colMnemonic = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colComment = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colName = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colType = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colStatus = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colIndent = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.panelTop.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
+            this.SuspendLayout();
+            // 
+            // panelTop
+            // 
+            this.panelTop.Controls.Add(this.btnSave);
+            this.panelTop.Controls.Add(this.txtFilePath);
+            this.panelTop.Controls.Add(this.lblFilePath);
+            this.panelTop.Controls.Add(this.btnUpload);
+            this.panelTop.Dock = System.Windows.Forms.DockStyle.Top;
+            this.panelTop.Location = new System.Drawing.Point(0, 0);
+            this.panelTop.Name = "panelTop";
+            this.panelTop.Padding = new System.Windows.Forms.Padding(8);
+            this.panelTop.Size = new System.Drawing.Size(960, 48);
+            this.panelTop.TabIndex = 0;
+            // 
+            // btnSave
+            // 
+            this.btnSave.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnSave.Location = new System.Drawing.Point(864, 11);
+            this.btnSave.Name = "btnSave";
+            this.btnSave.Size = new System.Drawing.Size(88, 26);
+            this.btnSave.TabIndex = 3;
+            this.btnSave.Text = "Save Data";
+            this.btnSave.UseVisualStyleBackColor = true;
+            // 
+            // txtFilePath
+            // 
+            this.txtFilePath.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+                        | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtFilePath.Location = new System.Drawing.Point(272, 13);
+            this.txtFilePath.Name = "txtFilePath";
+            this.txtFilePath.ReadOnly = true;
+            this.txtFilePath.Size = new System.Drawing.Size(578, 22);
+            this.txtFilePath.TabIndex = 2;
+            // 
+            // lblFilePath
+            // 
+            this.lblFilePath.AutoSize = true;
+            this.lblFilePath.Location = new System.Drawing.Point(213, 17);
+            this.lblFilePath.Name = "lblFilePath";
+            this.lblFilePath.Size = new System.Drawing.Size(57, 13);
+            this.lblFilePath.TabIndex = 1;
+            this.lblFilePath.Text = "File path:";
+            // 
+            // btnUpload
+            // 
+            this.btnUpload.Location = new System.Drawing.Point(8, 11);
+            this.btnUpload.Name = "btnUpload";
+            this.btnUpload.Size = new System.Drawing.Size(192, 26);
+            this.btnUpload.TabIndex = 0;
+            this.btnUpload.Text = "Upload CSV…";
+            this.btnUpload.UseVisualStyleBackColor = true;
+            // 
+            // dataGridView1
+            // 
+            this.dataGridView1.AllowUserToAddRows = false;
+            this.dataGridView1.AllowUserToDeleteRows = false;
+            this.dataGridView1.AutoGenerateColumns = false;
+            this.dataGridView1.BackgroundColor = System.Drawing.SystemColors.Window;
+            this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            this.dataGridView1.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
+            this.colMnemonic,
+            this.colComment,
+            this.colName,
+            this.colType,
+            this.colStatus,
+            this.colIndent});
+            this.dataGridView1.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.dataGridView1.Location = new System.Drawing.Point(0, 48);
+            this.dataGridView1.Name = "dataGridView1";
+            this.dataGridView1.RowHeadersVisible = false;
+            this.dataGridView1.Size = new System.Drawing.Size(960, 552);
+            this.dataGridView1.TabIndex = 1;
+            // 
+            // colMnemonic
+            // 
+            this.colMnemonic.DataPropertyName = "Mnemonic";
+            this.colMnemonic.HeaderText = "Mnemonic";
+            this.colMnemonic.Name = "colMnemonic";
+            this.colMnemonic.Width = 140;
+            // 
+            // colComment
+            // 
+            this.colComment.DataPropertyName = "Comment";
+            this.colComment.HeaderText = "Comment";
+            this.colComment.Name = "colComment";
+            this.colComment.Width = 260;
+            // 
+            // colName
+            // 
+            this.colName.DataPropertyName = "Name";
+            this.colName.HeaderText = "Name";
+            this.colName.Name = "colName";
+            this.colName.Width = 160;
+            // 
+            // colType
+            // 
+            this.colType.DataPropertyName = "Type";
+            this.colType.HeaderText = "Type";
+            this.colType.Name = "colType";
+            this.colType.Width = 120;
+            // 
+            // colStatus
+            // 
+            this.colStatus.DataPropertyName = "Status";
+            this.colStatus.HeaderText = "Status";
+            this.colStatus.Name = "colStatus";
+            this.colStatus.ReadOnly = true;
+            this.colStatus.Width = 140;
+            // 
+            // colIndent
+            // 
+            this.colIndent.DataPropertyName = "IndentId";
+            this.colIndent.HeaderText = "Indent";
+            this.colIndent.Name = "colIndent";
+            this.colIndent.ReadOnly = true;
+            this.colIndent.Width = 150;
+            // 
+            // TiersControl
+            // 
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
+            this.Controls.Add(this.dataGridView1);
+            this.Controls.Add(this.panelTop);
+            this.Name = "TiersControl";
+            this.Size = new System.Drawing.Size(960, 600);
+            this.panelTop.ResumeLayout(false);
+            this.panelTop.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
+            this.ResumeLayout(false);
+
+        }
+    }
+}
+
+TiersControl.cs (logic + logging hooks)
+// TiersControl.cs
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace YourApp.Controls
+{
+    public partial class TiersControl : UserControl
+    {
+        private readonly BindingList<TierRow> _rows = new BindingList<TierRow>();
+        private CancellationTokenSource _cts;
+
+        public TiersControl()
+        {
+            InitializeComponent();
+
+            dataGridView1.AutoGenerateColumns = false;
+            dataGridView1.DataSource = _rows;
+
+            btnUpload.Click += btnUpload_Click;
+            btnSave.Click += btnSave_Click;
+
+            Logger.Info("TiersControl initialized.");
+        }
+
+        private async void btnUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                using (var ofd = new OpenFileDialog())
+                {
+                    ofd.Title = "Select CSV file";
+                    ofd.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*";
+                    if (ofd.ShowDialog(this) != DialogResult.OK) return;
+
+                    txtFilePath.Text = ofd.FileName;
+                    Logger.Info("Selected CSV: " + ofd.FileName);
+
+                    var imported = await LoadCsvAsync(ofd.FileName);
+                    _rows.Clear();
+                    foreach (var r in imported) _rows.Add(r);
+
+                    Logger.Info("CSV loaded. Rows: " + _rows.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Upload failed: " + ex);
+                MessageBox.Show(this, "Failed to load CSV:\r\n" + ex.Message,
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private async void btnSave_Click(object sender, EventArgs e)
+        {
+            if (_rows.Count == 0)
+            {
+                MessageBox.Show(this, "No rows to process.", "Info",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            btnSave.Enabled = false;
+            btnUpload.Enabled = false;
+
+            if (_cts != null) _cts.Dispose();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+
+            using (var wait = new WaitingForm())
+            {
+                wait.TextLine = "Creating tiers…";
+                wait.Max = _rows.Count;
+                wait.CanCancel = true;
+                wait.OnCancel = delegate { if (_cts != null) _cts.Cancel(); };
+                wait.Show(this);
+
+                try
+                {
+                    int completed = 0;
+                    Logger.Info("Start processing " + _rows.Count + " rows.");
+
+                    await Task.Run(async () =>
+                    {
+                        foreach (var row in _rows)
+                        {
+                            if (token.IsCancellationRequested) break;
+
+                            UpdateRow(row, "Working…", null);
+
+                            try
+                            {
+                                string indent = await CreateTierAsync(row, token);
+                                UpdateRow(row, "Created", indent);
+                                Logger.Info("Row created. Mnemonic=" + Safe(row.Mnemonic) + " Indent=" + indent);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                UpdateRow(row, "Canceled", null);
+                                Logger.Warn("Operation canceled by user.");
+                                break;
+                            }
+                            catch (Exception exRow)
+                            {
+                                UpdateRow(row, "Failed: " + Short(exRow.Message), null);
+                                Logger.Error("Row failed. Mnemonic=" + Safe(row.Mnemonic) + " Error=" + exRow);
+                            }
+
+                            completed++;
+                            wait.SafeStep(completed);
+                        }
+                    }, token);
+
+                    Logger.Info("Processing done.");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("Batch failed: " + ex);
+                    MessageBox.Show(this, "An error occurred:\r\n" + ex.Message,
+                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    wait.Close();
+                    btnSave.Enabled = true;
+                    btnUpload.Enabled = true;
+                }
+            }
+        }
+
+        // ---------------------------------------------
+        // CSV loading
+        // ---------------------------------------------
+        private Task<List<TierRow>> LoadCsvAsync(string path)
+        {
+            return Task.Factory.StartNew<List<TierRow>>(() =>
+            {
+                var result = new List<TierRow>();
+
+                using (var csv = new CsvReader(path, null))
+                {
+                    var rows = new List<string[]>();
+                    foreach (var r in csv.ReadRows()) rows.Add(r);
+                    if (rows.Count == 0) return result;
+
+                    var header = rows[0].Select(h => (h ?? string.Empty).Trim()).ToArray();
+                    int idxMnemonic = Find(header, "Mnemonic");
+                    int idxComment = Find(header, "Comment");
+                    int idxName = Find(header, "Name");
+                    int idxType = Find(header, "Type");
+                    // Any "Indent" in CSV is intentionally ignored
+
+                    for (int i = 1; i < rows.Count; i++)
+                    {
+                        var r = rows[i];
+                        Func<int, string> At = delegate (int k)
+                        {
+                            if (k < 0 || k >= r.Length) return null;
+                            var v = r[k];
+                            return string.IsNullOrEmpty(v) ? null : v;
+                        };
+
+                        var row = new TierRow
+                        {
+                            Mnemonic = At(idxMnemonic),
+                            Comment = At(idxComment),
+                            Name = At(idxName),
+                            Type = At(idxType),
+                            IndentId = null,
+                            Status = "Pending"
+                        };
+                        result.Add(row);
+                    }
+                }
+
+                return result;
+            });
+        }
+
+        private static int Find(string[] header, string name)
+        {
+            for (int i = 0; i < header.Length; i++)
+            {
+                if (string.Equals(header[i], name, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            return -1;
+        }
+
+        // ---------------------------------------------
+        // Domain call (replace with your real repository)
+        // ---------------------------------------------
+        private static async Task<string> CreateTierAsync(TierRow row, CancellationToken ct)
+        {
+            // Example validation
+            if (row == null || string.IsNullOrWhiteSpace(row.Mnemonic))
+                throw new InvalidOperationException("Mnemonic is required.");
+
+            // TODO: call your real service/repository here
+            await Task.Delay(400, ct); // simulate work/I-O
+
+            // Return generated Indent/ID
+            return "IND-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpperInvariant();
+        }
+
+        // ---------------------------------------------
+        // UI/thread helpers
+        // ---------------------------------------------
+        private void UpdateRow(TierRow row, string status, string indent)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<TierRow, string, string>(UpdateRow), row, status, indent);
+                return;
+            }
+            row.Status = status;
+            if (!string.IsNullOrEmpty(indent))
+                row.IndentId = indent;
+        }
+
+        private static string Short(string s)
+        {
+            if (s == null) return string.Empty;
+            return s.Length > 200 ? s.Substring(0, 197) + "…" : s;
+        }
+
+        private static string Safe(string s)
+        {
+            return s == null ? "(null)" : s;
+        }
+    }
+}
+
+Supporting classes (add these files once; all are .NET 4.8-friendly, no external libs)
+
+Add each as a separate .cs file in your project.
+
+TierRow.cs
+using System.ComponentModel;
+
+public class TierRow : INotifyPropertyChanged
+{
+    private string _mnemonic;
+    private string _comment;
+    private string _name;
+    private string _type;
+    private string _status;
+    private string _indentId;
+
+    public string Mnemonic { get { return _mnemonic; } set { _mnemonic = value; OnChanged("Mnemonic"); } }
+    public string Comment  { get { return _comment;  } set { _comment  = value; OnChanged("Comment");  } }
+    public string Name     { get { return _name;     } set { _name     = value; OnChanged("Name");     } }
+    public string Type     { get { return _type;     } set { _type     = value; OnChanged("Type");     } }
+    public string Status   { get { return _status;   } set { _status   = value; OnChanged("Status");   } }
+    public string IndentId { get { return _indentId; } set { _indentId = value; OnChanged("IndentId"); } }
+
+    public event PropertyChangedEventHandler PropertyChanged;
+    private void OnChanged(string name)
+    {
+        var h = PropertyChanged;
+        if (h != null) h(this, new PropertyChangedEventArgs(name));
+    }
+}
+
+CsvReader.cs (RFC-4180-style, quotes/newlines handled)
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+
+public sealed class CsvReader : IDisposable
+{
+    private readonly TextReader _reader;
+    private bool _disposed;
+
+    public CsvReader(string path, Encoding encoding)
+    {
+        _reader = new StreamReader(path, encoding ?? Encoding.UTF8, true);
+    }
+
+    public CsvReader(Stream stream, Encoding encoding)
+    {
+        _reader = new StreamReader(stream, encoding ?? Encoding.UTF8, true);
+    }
+
+    public IEnumerable<string[]> ReadRows()
+    {
+        var row = new List<string>();
+        var field = new StringBuilder();
+        bool inQuotes = false;
+        int ch;
+
+        while ((ch = _reader.Read()) != -1)
+        {
+            char c = (char)ch;
+
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    int peek = _reader.Peek();
+                    if (peek == '"') { _reader.Read(); field.Append('"'); }
+                    else { inQuotes = false; }
+                }
+                else
+                {
+                    field.Append(c);
+                }
+            }
+            else
+            {
+                if (c == ',')
+                {
+                    row.Add(field.ToString()); field.Clear();
+                }
+                else if (c == '\r')
+                {
+                    if (_reader.Peek() == '\n') _reader.Read();
+                    row.Add(field.ToString()); field.Clear();
+                    yield return row.ToArray();
+                    row.Clear();
+                }
+                else if (c == '\n')
+                {
+                    row.Add(field.ToString()); field.Clear();
+                    yield return row.ToArray();
+                    row.Clear();
+                }
+                else if (c == '"')
+                {
+                    inQuotes = true;
+                }
+                else
+                {
+                    field.Append(c);
+                }
+            }
+        }
+
+        if (inQuotes)
+            throw new InvalidDataException("CSV ended while inside a quoted field.");
+
+        if (field.Length > 0 || row.Count > 0)
+        {
+            row.Add(field.ToString());
+            yield return row.ToArray();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _reader.Dispose();
+        _disposed = true;
+    }
+}
+
+WaitingForm.cs (progress + cancel, UI-safe)
+using System;
+using System.Windows.Forms;
+
+public class WaitingForm : Form
+{
+    private readonly ProgressBar _bar = new ProgressBar();
+    private readonly Label _label = new Label();
+    private readonly Button _cancel = new Button();
+
+    public Action OnCancel { get; set; }
+    public bool CanCancel { get { return _cancel.Enabled; } set { _cancel.Enabled = value; } }
+    public int Max { get { return _bar.Maximum; } set { _bar.Maximum = value; _bar.Value = 0; } }
+    public string TextLine { get { return _label.Text; } set { _label.Text = value; } }
+
+    public WaitingForm()
+    {
+        Text = "Please wait";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        ControlBox = false;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        Width = 420; Height = 140;
+        Padding = new Padding(12);
+
+        _label.Dock = DockStyle.Top;
+        _label.Height = 28;
+        _label.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+
+        _bar.Dock = DockStyle.Top;
+        _bar.Height = 24;
+        _bar.Style = ProgressBarStyle.Continuous;
+
+        _cancel.Text = "Cancel";
+        _cancel.Dock = DockStyle.Top;
+        _cancel.Height = 28;
+        _cancel.Click += delegate { var cb = OnCancel; if (cb != null) cb(); };
+
+        Controls.Add(_cancel);
+        Controls.Add(_bar);
+        Controls.Add(_label);
+    }
+
+    public void SafeStep(int value)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action<int>(SafeStep), value);
+            return;
+        }
+        if (value < 0) value = 0;
+        if (value > _bar.Maximum) value = _bar.Maximum;
+        _bar.Value = value;
+    }
+}
+
+Logger.cs
