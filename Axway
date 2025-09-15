@@ -1,0 +1,230 @@
+Where to get the Swagger JSON
+
+You have three solid options. I recommend Option A (CI-friendly and repeatable).
+
+A) Generate at build time with Swashbuckle CLI (recommended)
+
+Add the CLI tool to your project:
+
+dotnet tool install --global Swashbuckle.AspNetCore.Cli
+
+
+(On a locked CI, add it to your repo’s dotnet-tools.json instead and run dotnet tool restore.)
+
+After dotnet publish, run:
+
+dotnet swagger tofile \
+  --output ./deploy/swagger.json \
+  ./bin/Release/<TFM>/<YourAssembly>.dll \
+  v1
+
+
+Replace <TFM> (e.g., net7.0) and <YourAssembly>.dll.
+
+B) Download from the running app (simple)
+
+Start the published app locally in CI, then curl http://localhost:<port>/swagger/v1/swagger.json -o ./deploy/swagger.json.
+
+C) Commit a static swagger.json
+
+Least preferred; easy but can drift from code.
+
+Files you will ship in the XLD package
+sophis-bio-api_v1.zip
+├─ swagger.json      (generated as above)
+└─ config.json       (below)
+
+config.json (no auth yet, internal use)
+{
+  "name": "SophisBIOAPI",
+  "version": "1.0",
+  "type": "rest",
+  "description": "Sophis Back-Office API promoted via XL Deploy",
+  "backend": {
+    "url": "${API_SOPHISBIO_BACKEND_URL}"
+  },
+  "frontend": {
+    "basePath": "/api/sophisbo",
+    "cors": {
+      "origins": "${API_SOPHISBIO_ORIGIN_CORS}",
+      "allowedHeaders": "Authorization,Content-Type",
+      "allowedMethods": "GET,POST,PUT,DELETE,OPTIONS",
+      "allowCredentials": true
+    }
+  },
+  "policies": {
+    "backendTls": {
+      "mtls": false,
+      "clientCertAlias": "${API_SOPHISBIO_CERT_BACKEND}"
+    }
+  },
+  "visibility": "internal",
+  "tags": ["sophis", "bio", "v1"]
+}
+
+
+Notes:
+
+No trailing / in API_SOPHISBIO_BACKEND_URL.
+
+Leave mtls: false now; when/if you need mutual TLS, set true and provide the alias.
+
+XL Deploy dictionaries (per environment)
+
+Create these keys for BENCH and PROD (same keys, different values):
+
+API_SOPHISBIO_BACKEND_URL   = https://<env-backend-host>:<port>
+API_SOPHISBIO_ORIGIN_CORS   = https://<env-ui-host-1>,https://<env-ui-host-2>
+API_SOPHISBIO_CERT_BACKEND  = <empty or client-cert-alias if mTLS>
+
+
+If later you add OAuth, we’ll add APP variables (redirect URIs, allowed origins) and a security block to config.json—the package structure stays the same.
+
+Jenkinsfile (complete, Bench → Prod promotion)
+
+This assumes a Windows agent (you use bat/PowerShell). Replace <TFM> and <YourAssembly>.dll. If you already have a versioning stage, keep yours.
+
+pipeline {
+  agent any
+  options { disableConcurrentBuilds() } // avoid parallel deploys to same gateway
+
+  environment {
+    VERSION = "1.0.${BUILD_NUMBER}"
+    XLD_URL  = credentials('xld-url')      // or env var
+    XLD_USER = credentials('xld-user')
+    XLD_PASS = credentials('xld-pass')
+  }
+
+  stages {
+    stage('Restore & Build') {
+      steps {
+        bat 'dotnet restore SophisBOAPI.sln'
+        bat 'dotnet build SophisBOAPI.sln -c Release'
+        bat 'dotnet publish ./src/SophisBOAPI/SophisBOAPI.csproj -c Release -o out /p:Version=%VERSION%'
+      }
+    }
+
+    stage('Generate swagger.json') {
+      steps {
+        // Option A: Swashbuckle CLI
+        bat 'dotnet tool restore' // if you track dotnet-tools.json in repo
+        bat 'mkdir deploy'
+        bat 'dotnet swagger tofile --output deploy\\swagger.json .\\out\\<TFM>\\<YourAssembly>.dll v1'
+        // Option B instead:
+        // bat 'start /B out\\<TFM>\\<YourAssembly>.exe'
+        // bat 'powershell -Command "Invoke-WebRequest http://localhost:5000/swagger/v1/swagger.json -OutFile deploy/swagger.json"'
+      }
+    }
+
+    stage('Prepare config.json') {
+      steps {
+        // keep config.json under repo folder 'deploy/config.json'
+        bat 'copy /Y deploy\\config.json deploy\\config.json'
+      }
+    }
+
+    stage('Create XLD package (zip)') {
+      steps {
+        bat 'mkdir xld_pkg'
+        bat 'copy /Y deploy\\swagger.json xld_pkg\\swagger.json'
+        bat 'copy /Y deploy\\config.json  xld_pkg\\config.json'
+        bat 'powershell -NoProfile -Command "Compress-Archive -Path xld_pkg\\* -DestinationPath sophis-bio-api_v1.zip -Force"'
+        archiveArtifacts artifacts: 'sophis-bio-api_v1.zip', fingerprint: true
+      }
+    }
+
+    stage('Deploy to BENCH (XL Deploy)') {
+      steps {
+        // Use your org’s XL Deploy step/plugin; below is pseudo-CLI
+        bat '''
+          xld-cli --url %XLD_URL% --user %XLD_USER% --password %XLD_PASS% ^
+            deploy --application SophisBIOAPI/%VERSION% ^
+            --package sophis-bio-api_v1.zip ^
+            --environment BENCH ^
+            --dictionary DICT_BENCH_SOPHISBIO
+        '''
+      }
+    }
+
+    stage('Smoke test (BENCH)') {
+      steps {
+        // hit a simple endpoint; replace host/path
+        bat 'powershell -NoProfile -Command "Invoke-WebRequest https://<bench-gw-host>/api/sophisbo/health -UseBasicParsing"'
+      }
+    }
+
+    stage('Promote to PROD (manual gate)') {
+      steps {
+        input message: 'Promote the same artifact to PROD?'
+        bat '''
+          xld-cli --url %XLD_URL% --user %XLD_USER% --password %XLD_PASS% ^
+            deploy --application SophisBIOAPI/%VERSION% ^
+            --package sophis-bio-api_v1.zip ^
+            --environment PROD ^
+            --dictionary DICT_PROD_SOPHISBIO
+        '''
+      }
+    }
+  }
+}
+
+
+If your company uses the nxsAxwayGateway.archive step inside Jenkins (as your docs show), swap the CLI block for that plugin call—inputs stay: artifact ZIP, environment, dictionary.
+
+What you’ll tell your prod team (the only missing bits)
+
+BENCH & PROD backend base URLs (no trailing /).
+
+CORS origins per env (exact https://host[:port]).
+
+Whether mTLS is required to the backend; if yes, the client-cert alias pre-installed on the gateway.
+
+XLD environment names and dictionary IDs to target (e.g., BENCH, PROD, DICT_BENCH_SOPHISBIO, …).
+
+Any mandatory gateway policies (rate limit/logging header policies) that must be referenced by name—if so, I’ll add them under policies.
+
+(Optional) When you add security later
+
+Add this to config.json without changing packaging:
+
+"security": {
+  "mode": "oauthExternal",
+  "securitySchemes": {
+    "ClientCredentials": {
+      "type": "oauth2",
+      "flows": {
+        "clientCredentials": {
+          "tokenUrl": "https://<keycloak>/realms/<realm>/protocol/openid-connect/token",
+          "scopes": { "read": "Read", "write": "Write" }
+        }
+      }
+    }
+  },
+  "applyTo": ["*"]
+}
+
+
+And if backend requires mTLS:
+
+"policies": { "backendTls": { "mtls": true, "clientCertAlias": "${API_SOPHISBIO_CERT_BACKEND}" } }
+
+TL;DR (complete, actionable summary)
+
+Get swagger.json: Use Swashbuckle CLI after publish
+dotnet swagger tofile --output deploy/swagger.json ./out/<TFM>/<YourAssembly>.dll v1
+
+Build the package: ZIP only swagger.json + config.json → sophis-bio-api_v1.zip
+
+config.json: use the template above (no auth, CORS + backend, basePath /api/sophisbo)
+
+XLD dictionaries (per env):
+
+API_SOPHISBIO_BACKEND_URL = https://<env-backend>:<port> (no /)
+
+API_SOPHISBIO_ORIGIN_CORS = https://<env-ui-1>,https://<env-ui-2>
+
+API_SOPHISBIO_CERT_BACKEND = <alias or empty>
+
+Jenkins: build → generate swagger → create ZIP → deploy to BENCH via XLD (dictionary) → manual gate → deploy to PROD (same ZIP, prod dictionary)
+
+No need to export from API Manager DEV. Promotion is declarative via the ZIP + dictionaries.
