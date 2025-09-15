@@ -1,249 +1,111 @@
-private async Task<List<TierRow>> LoadCsvAsync(string path, CancellationToken ct = default(CancellationToken))
+If your wrapper exposes GetDescription(out XmlReader), that’s perfect: it gives you the full party XML. You can:
+
+read that XML,
+
+tweak the fields you want,
+
+load the edited XML into a System.Data.DataSet,
+
+call cSMThirdParty.Create(ds) → this creates a brand-new party.
+
+Here’s a clean, self-contained helper that does exactly that.
+
+using System.Data;
+using System.IO;
+using System.Xml;
+using System.Xml.Linq;
+
+public static class SophisPartyFactory
 {
-    return await Task.Run(() =>
+    /// <summary>
+    /// Clone-by-XML: copy an existing party's full description, edit it, then Create(ds).
+    /// </summary>
+    public static int CreateFromTemplate(
+        string templateReference,     // e.g. "CDCM" (any valid party)
+        string shortName,
+        string longName,
+        string uniqueCode,            // must be unique (avoid DuplicatePartyException)
+        string domicile = null,
+        string location = null
+    )
     {
-        var result = new List<TierRow>();
+        // 1) Get template party
+        var template = cSMThirdParty.GetcSMThirdPartyByReference(templateReference);
 
-        using (var csv = new CsvReader(path, null))
-        {
-            string[] header = null;
-            int line = 0;
+        // 2) Pull FULL description as XML
+        template.GetDescription(out XmlReader reader);   // your screenshot shows this API
+        XDocument xdoc = XDocument.Load(reader);
+        reader.Dispose();
 
-            foreach (var row in csv.ReadRows())
-            {
-                ct.ThrowIfCancellationRequested();
-                line++;
+        // 3) Edit the XML
+        XNamespace ns = "www.sophis.net/party";
+        var party = xdoc.Root?.Element(ns + "party");    // must be <party> (not <partyReference>)
+        if (party == null)
+            throw new InvalidOperationException("GetDescription did not return a <party> element.");
 
-                if (line == 1)
-                {
-                    header = row.Select(h => (h ?? string.Empty).Trim()).ToArray();
+        Set(party, ns, "ShortName", shortName);
+        Set(party, ns, "LongName",  longName);
+        if (!string.IsNullOrEmpty(location)) Set(party, ns, "Location", location);
+        if (!string.IsNullOrEmpty(domicile)) Set(party, ns, "Domicile", domicile);
 
-                    int idxMnemonic = Find(header, "Mnemonic");
-                    int idxName     = Find(header, "Name");
-                    int idxType     = Find(header, "Type");
+        // Replace identifiers to ensure uniqueness
+        var idents = party.Element(ns + "Identifiers");
+        if (idents != null) idents.Remove();
+        idents = new XElement(ns + "Identifiers");
+        idents.Add(new XElement(ns + "Identifier",
+                     new XElement(ns + "Name",  "Code"),    // use your site’s identifier label if different
+                     new XElement(ns + "Value", uniqueCode)));
+        party.Add(idents);
 
-                    if (idxMnemonic < 0 || idxName < 0 || idxType < 0)
-                        throw new InvalidDataException("Colonnes requises manquantes: Mnemonic, Name, Type.");
+        // If your site requires other mandatory blocks (Category/Status/etc.), keep them from the template
+        // or Set(...) them explicitly the same way as above.
 
-                    continue;
-                }
+        // 4) Load the edited XML into a System.Data.DataSet (your wrapper marshals this internally)
+        var ds = new DataSet();
+        using (var sr = new StringReader(xdoc.ToString()))
+            ds.ReadXml(sr, XmlReadMode.Auto);
 
-                int iMnemonic = Find(header, "Mnemonic");
-                int iComment  = Find(header, "Comment");
-                int iName     = Find(header, "Name");
-                int iType     = Find(header, "Type");
-
-                string At(int idx)
-                {
-                    if (idx < 0 || idx >= row.Length) return null;
-                    var v = row[idx];
-                    return string.IsNullOrEmpty(v) ? null : v;
-                }
-
-                var item = new TierRow
-                {
-                    Mnemonic = At(iMnemonic),
-                    Comment  = At(iComment),
-                    Name     = At(iName),
-                    Type     = At(iType),
-                    Status   = "Pending",
-                    IndentId = null
-                };
-
-                result.Add(item);
-            }
-        }
-
-        return result;
-    }).ConfigureAwait(false);
-}
----------
-
-private async void btnUpload_Click(object sender, EventArgs e)
-{
-    try
-    {
-        using (var ofd = new OpenFileDialog
-        {
-            Title = "Select CSV file",
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            RestoreDirectory = true
-        })
-        {
-            if (ofd.ShowDialog(this) != DialogResult.OK) return;
-
-            txtFilePath.Text = ofd.FileName;
-
-            using (var cts = new CancellationTokenSource())
-            {
-                var rows = await LoadCsvAsync(ofd.FileName, cts.Token).ConfigureAwait(true);
-
-                _rows.Clear();
-                foreach (var r in rows) _rows.Add(r);
-            }
-        }
+        // 5) Create the new party
+        var created = cSMThirdParty.Create(ds);
+        return created.GetIdent();
     }
-    catch (OperationCanceledException)
+
+    private static void Set(XElement parent, XNamespace ns, string name, string value)
     {
-        // annulation utilisateur : no-op
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show(this, "Failed to load CSV:\r\n" + ex.Message,
-            "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        var el = parent.Element(ns + name);
+        if (el == null) { el = new XElement(ns + name); parent.Add(el); }
+        el.Value = value ?? string.Empty;
     }
 }
-------
-private async void btnSave_Click(object sender, EventArgs e)
-{
-    if (_rows.Count == 0)
-    {
-        MessageBox.Show(this, "No rows to process.", "Info",
-            MessageBoxButtons.OK, MessageBoxIcon.Information);
-        return;
-    }
 
-    btnSave.Enabled = false;
-    btnUpload.Enabled = false;
 
-    _cts?.Dispose();
-    _cts = new CancellationTokenSource();
-    var token = _cts.Token;
+Usage:
 
-    using (var wait = new WaitingForm())
-    {
-        wait.TextLine = "Creating tiers…";
-        wait.Max = _rows.Count;
-        wait.CanCancel = true;
-        wait.OnCancel = () => _cts?.Cancel();
-        wait.Show(this);
+int newIdent = SophisPartyFactory.CreateFromTemplate(
+    templateReference: "CDCM",
+    shortName:  "ACME",
+    longName:   "ACME Corporation",
+    uniqueCode: "ACME001",
+    domicile:   "GB",
+    location:   "LON"
+);
 
-        try
-        {
-            var dop = Math.Max(1, Environment.ProcessorCount - 1);
-            using (var gate = new System.Threading.SemaphoreSlim(dop))
-            {
-                int completed = 0;
-                var tasks = new List<Task>();
+Why this is the best fit for your setup
 
-                foreach (var row in _rows)
-                {
-                    await gate.WaitAsync(token).ConfigureAwait(true);
+It uses the exact XML shape your installation expects (no guessing).
 
-                    var t = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            token.ThrowIfCancellationRequested();
-                            UpdateRow(row, "Working…", null);
+It avoids mutating the original party.
 
-                            string indent = await CreateTierWithRetryAsync(row, token).ConfigureAwait(false);
+It stays inside the APIs your wrapper exposes: GetDescription(out XmlReader) + Create(System.Data.DataSet).
 
-                            UpdateRow(row, "Created", indent);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            UpdateRow(row, "Canceled", null);
-                        }
-                        catch (Exception exRow)
-                        {
-                            // Court message dans la grille, sans logs
-                            var msg = exRow.Message;
-                            if (!string.IsNullOrEmpty(msg) && msg.Length > 200)
-                                msg = msg.Substring(0, 197) + "…";
+Troubleshooting cheatsheet
 
-                            UpdateRow(row, "Failed: " + (msg ?? "Error"), null);
-                        }
-                        finally
-                        {
-                            System.Threading.Interlocked.Increment(ref completed);
-                            wait.SafeStep(completed);
-                            gate.Release();
-                        }
-                    }, token);
+DuplicatePartyException → change uniqueCode or short name; it collides with an existing identifier.
 
-                    tasks.Add(t);
-                }
+InvalidDataValue → a required field (per your site’s party.xsd/rules) is missing or invalid. Keep the template’s structure and only change values you must; add more Set(...) lines if needed (Category, Status, Country, etc.).
 
-                await Task.WhenAll(tasks).ConfigureAwait(true);
-            }
+If GetDescription ever returns only a <partyReference> (rare), then it’s not the right call. But your screenshot implies it returns the full description—just confirm by logging xdoc.ToString() once.
 
-            // Résumé
-            var ok = _rows.Count(r => string.Equals(r.Status, "Created", StringComparison.OrdinalIgnoreCase));
-            var ko = _rows.Count(r => r.Status != null && r.Status.StartsWith("Failed", StringComparison.OrdinalIgnoreCase));
-            var ca = _rows.Count(r => string.Equals(r.Status, "Canceled", StringComparison.OrdinalIgnoreCase));
-            MessageBox.Show(this, $"Done.\r\nCreated: {ok}\r\nFailed: {ko}\r\nCanceled: {ca}", "Summary",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "An error occurred:\r\n" + ex.Message,
-                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            wait.Close();
-            btnSave.Enabled = true;
-            btnUpload.Enabled = true;
-
-            _cts.Dispose();
-            _cts = null;
-        }
-    }
-}
-------------
-private static async Task<string> CreateTierWithRetryAsync(TierRow row, CancellationToken ct)
-{
-    const int maxAttempts = 3;
-    int attempt = 0;
-    Exception last = null;
-
-    while (attempt++ < maxAttempts)
-    {
-        ct.ThrowIfCancellationRequested();
-        try
-        {
-            return await CreateTierAsync(row, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            last = ex;
-            if (attempt >= maxAttempts) break;
-            await Task.Delay(250 * attempt, ct).ConfigureAwait(false);
-        }
-    }
-    throw last ?? new InvalidOperationException("Unknown error");
-}
------------
-protected override void OnHandleCreated(EventArgs e)
-{
-    base.OnHandleCreated(e);
-    try
-    {
-        typeof(DataGridView).InvokeMember("DoubleBuffered",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.SetProperty,
-            null, dataGridView1, new object[] { true });
-    }
-    catch { /* no-op */ }
-}
---------------
-public TiersControl()
-{
-    InitializeComponent();
-
-    dataGridView1.AutoGenerateColumns = false;
-    dataGridView1.DataSource = _rows;
-
-    dataGridView1.DataError += (s, e2) =>
-    {
-        // Empêche les exceptions UI en cas de conversion/format
-        e2.ThrowException = false;
-    };
-
-    btnUpload.Click += btnUpload_Click;
-    btnSave.Click += btnSave_Click;
-}
 -----------
 
 Mnemonic,Comment,Name,Type
