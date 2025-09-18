@@ -1,465 +1,61 @@
-namespace Tethys
+// Put this helper in your control file (top-level, private)
+private sealed class Item<T>
 {
-    [System.Flags]
-    public enum InstitutionFlags
-    {
-        None           = 0,
-        Counterparty   = 1 << 0,
-        Broker         = 1 << 1,
-        ClearingHouse  = 1 << 2,
-        Group          = 1 << 3,
-        ExecutionVenue = 1 << 4,
-        Depositary     = 1 << 5,
-        Customer       = 1 << 6,
-        PSET           = 1 << 7,
-        ClearingMember = 1 << 8,
-        TradeRepository= 1 << 9
-    }
-
-    [System.Flags]
-    public enum CategoryFlags
-    {
-        None          = 0,
-        Corporate     = 1 << 0,
-        Exchange      = 1 << 1,
-        Institution   = 1 << 2,
-        Bank          = 1 << 3,
-        Other         = 1 << 4
-    }
-
-    [System.Flags]
-    public enum ReportingOptions
-    {
-        None         = 0,
-        GrossPrice   = 1 << 0,
-        AveragePrice = 1 << 1,
-        MarketTax    = 1 << 2
-    }
-
-    public enum ParentOption
-    {
-        None, INT, ISDA, AFB, EXT
-    }
+    public string Text { get; set; }
+    public T Value { get; set; }
+    public override string ToString() => Text;
 }
 
--------------------------
-using System.ComponentModel;
-
-namespace Tethys
+// --- IsEntity (bool?) ---
+var isEntityItems = new List<Item<bool?>>
 {
-    public sealed class TierRow : INotifyPropertyChanged
-    {
-        private string _mnemonic;
-        private InstitutionFlags _institutions;   // required: != None
-        private CategoryFlags _categories;        // optional
-        private ReportingOptions _reporting;      // optional
-        private bool? _isEntity;                  // optional
-        private ParentOption _parent;             // optional (None)
-
-        private string _status;
-        private string _indentId;
-        private string _error;
-
-        public string Mnemonic { get => _mnemonic; set { _mnemonic = value; OnChanged("Mnemonic"); } }
-        public InstitutionFlags Institutions { get => _institutions; set { _institutions = value; OnChanged("Institutions"); } }
-        public CategoryFlags Categories { get => _categories; set { _categories = value; OnChanged("Categories"); } }
-        public ReportingOptions Reporting { get => _reporting; set { _reporting = value; OnChanged("Reporting"); } }
-        public bool? IsEntity { get => _isEntity; set { _isEntity = value; OnChanged("IsEntity"); } }
-        public ParentOption Parent { get => _parent; set { _parent = value; OnChanged("Parent"); } }
-
-        public string Status { get => _status; set { _status = value; OnChanged("Status"); } }
-        public string IndentId { get => _indentId; set { _indentId = value; OnChanged("IndentId"); } }
-        public string Error { get => _error; set { _error = value; OnChanged("Error"); } }
-
-        public event PropertyChangedEventHandler PropertyChanged;
-        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-    }
-}
--------------------------
-namespace Tethys
-{
-    public sealed class TierCreateRequest
-    {
-        public string Mnemonic { get; set; }                  // required
-        public InstitutionFlags Institutions { get; set; }    // required (not None)
-        public CategoryFlags Categories { get; set; }         // optional
-        public ReportingOptions Reporting { get; set; }       // optional
-        public bool? IsEntity { get; set; }                   // optional
-        public ParentOption Parent { get; set; }              // optional (None)
-    }
-}
-----------------------------
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using Tethys;
-
-namespace Tethys.Utils
-{
-    internal static class ParseHelpers
-    {
-        private static string Key(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return string.Empty;
-            return new string(s.Where(ch => !char.IsWhiteSpace(ch) && ch != '-' && ch != '_').ToArray())
-                .ToLowerInvariant();
-        }
-
-        private static IEnumerable<string> Tokens(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) yield break;
-            foreach (var t in s.Split(new[] { '|', ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                yield return t.Trim();
-        }
-
-        // Aliases
-        private static readonly Dictionary<string, InstitutionFlags> _inst =
-            new Dictionary<string, InstitutionFlags>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"counterparty", InstitutionFlags.Counterparty}, {"cp", InstitutionFlags.Counterparty}, {"vendor", InstitutionFlags.Counterparty},
-                {"broker", InstitutionFlags.Broker},
-                {"clearinghouse", InstitutionFlags.ClearingHouse}, {"clearing house", InstitutionFlags.ClearingHouse},
-                {"group", InstitutionFlags.Group},
-                {"executionvenue", InstitutionFlags.ExecutionVenue}, {"execution venue", InstitutionFlags.ExecutionVenue},
-                {"depository", InstitutionFlags.Depositary}, {"depositary", InstitutionFlags.Depositary},
-                {"customer", InstitutionFlags.Customer}, {"client", InstitutionFlags.Customer},
-                {"pset", InstitutionFlags.PSET},
-                {"clearingmember", InstitutionFlags.ClearingMember}, {"clearing member", InstitutionFlags.ClearingMember},
-                {"traderepository", InstitutionFlags.TradeRepository}, {"trade repository", InstitutionFlags.TradeRepository},
-            };
-
-        private static readonly Dictionary<string, CategoryFlags> _cat =
-            new Dictionary<string, CategoryFlags>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"corporate", CategoryFlags.Corporate},
-                {"exchange", CategoryFlags.Exchange},
-                {"institution", CategoryFlags.Institution},
-                {"bank", CategoryFlags.Bank},
-                {"other", CategoryFlags.Other},
-            };
-
-        private static readonly Dictionary<string, ReportingOptions> _rep =
-            new Dictionary<string, ReportingOptions>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"grossprice", ReportingOptions.GrossPrice}, {"gross price", ReportingOptions.GrossPrice},
-                {"averageprice", ReportingOptions.AveragePrice}, {"average price", ReportingOptions.AveragePrice},
-                {"markettax", ReportingOptions.MarketTax}, {"market tax", ReportingOptions.MarketTax},
-            };
-
-        public static InstitutionFlags ParseInstitutionFlags(string s)
-        {
-            var f = InstitutionFlags.None;
-            foreach (var t in Tokens(s))
-            {
-                InstitutionFlags v; if (_inst.TryGetValue(Key(t), out v)) f |= v;
-            }
-            return f;
-        }
-
-        public static CategoryFlags ParseCategoryFlags(string s)
-        {
-            var f = CategoryFlags.None;
-            foreach (var t in Tokens(s))
-            {
-                CategoryFlags v; if (_cat.TryGetValue(Key(t), out v)) f |= v;
-            }
-            return f;
-        }
-
-        public static ReportingOptions ParseReporting(string s)
-        {
-            var f = ReportingOptions.None;
-            foreach (var t in Tokens(s))
-            {
-                ReportingOptions v; if (_rep.TryGetValue(Key(t), out v)) f |= v;
-            }
-            return f;
-        }
-
-        public static bool? ParseNullableBool(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return (bool?)null;
-            var k = s.Trim().ToLowerInvariant();
-            if (k=="true"||k=="t"||k=="1"||k=="yes"||k=="y") return true;
-            if (k=="false"||k=="f"||k=="0"||k=="no"||k=="n") return false;
-            return (bool?)null;
-        }
-
-        public static ParentOption ParseParent(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return ParentOption.None;
-            var k = Key(s);
-            if (k=="int"||k=="internal") return ParentOption.INT;
-            if (k=="isda") return ParentOption.ISDA;
-            if (k=="afb")  return ParentOption.AFB;
-            if (k=="ext"||k=="external") return ParentOption.EXT;
-            return ParentOption.None;
-        }
-
-        // Pretty printer for flags -> "A|B|C"
-        public static string FormatFlags<TEnum>(TEnum value) where TEnum : struct, IConvertible
-        {
-            var type = typeof(TEnum);
-            var zero = Convert.ToInt64(Activator.CreateInstance(type));
-            var v    = Convert.ToInt64(value);
-            if (v == zero) return string.Empty;
-
-            var names = Enum.GetValues(type).Cast<object>()
-                .Where(x => Convert.ToInt64(x) != zero && (v & Convert.ToInt64(x)) == Convert.ToInt64(x))
-                .Select(x => x.ToString());
-            return string.Join("|", names);
-        }
-    }
-}
-----------------------------------
-private static void ConfigureGridColumns(DataGridView grid)
-{
-    grid.AutoGenerateColumns = false;
-    grid.Columns.Clear();
-    grid.RowHeadersVisible = false;
-    grid.AllowUserToAddRows = false;
-    grid.AllowUserToDeleteRows = false;
-    grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colMnemonic", HeaderText="Mnemonic", DataPropertyName="Mnemonic", Width=140
-    });
-
-    // Multi-select fields shown as text ("A|B|C")
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colInstitutions", HeaderText="Institution Types (pipe-separated)",
-        DataPropertyName="Institutions", Width=260
-    });
-
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colCategories", HeaderText="Categories (pipe-separated)",
-        DataPropertyName="Categories", Width=220
-    });
-
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colReporting", HeaderText="Reporting (GrossPrice|AveragePrice|MarketTax)",
-        DataPropertyName="Reporting", Width=260
-    });
-
-    // IsEntity (nullable) combo
-    var boolCol = new DataGridViewComboBoxColumn
-    {
-        Name="colIsEntity", HeaderText="Is Entity", DataPropertyName="IsEntity",
-        DisplayStyle=DataGridViewComboBoxDisplayStyle.DropDownButton, FlatStyle=FlatStyle.Standard, Width=90
-    };
-    boolCol.Items.Add(""); boolCol.Items.Add("True"); boolCol.Items.Add("False");
-    grid.Columns.Add(boolCol);
-
-    // Parent combo
-    var parentCol = new DataGridViewComboBoxColumn
-    {
-        Name="colParent", HeaderText="Parent", DataPropertyName="Parent",
-        DisplayStyle=DataGridViewComboBoxDisplayStyle.DropDownButton, FlatStyle=FlatStyle.Standard, Width=120
-    };
-    parentCol.Items.AddRange(new object[] { "", "INT", "ISDA", "AFB", "EXT" });
-    grid.Columns.Add(parentCol);
-
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colStatus", HeaderText="Status", DataPropertyName="Status", ReadOnly=true, Width=200
-    });
-    grid.Columns.Add(new DataGridViewTextBoxColumn
-    {
-        Name="colIndent", HeaderText="Indent", DataPropertyName="IndentId", ReadOnly=true, Width=150
-    });
-
-    // Render flags as "A|B|C"
-    grid.CellFormatting += (s,e) =>
-    {
-        var g=(DataGridView)s; var name=g.Columns[e.ColumnIndex].Name;
-        if (name=="colInstitutions" && e.Value is InstitutionFlags)
-        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((InstitutionFlags)e.Value); e.FormattingApplied=true; }
-        else if (name=="colCategories" && e.Value is CategoryFlags)
-        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((CategoryFlags)e.Value); e.FormattingApplied=true; }
-        else if (name=="colReporting" && e.Value is ReportingOptions)
-        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((ReportingOptions)e.Value); e.FormattingApplied=true; }
-        else if (name=="colParent" && e.Value is ParentOption)
-        { var p=(ParentOption)e.Value; e.Value=p==ParentOption.None?"":p.ToString(); e.FormattingApplied=true; }
-        else if (name=="colIsEntity")
-        {
-            bool? v=null; if (e.Value is bool) v=(bool)e.Value; else if (e.Value is bool?) v=(bool?)e.Value;
-            e.Value=v.HasValue?(v.Value?"True":"False"):""; e.FormattingApplied=true;
-        }
-    };
-
-    // Parse edited text back into flags/bool/parent
-    grid.CellParsing += (s,e) =>
-    {
-        var g=(DataGridView)s; var name=g.Columns[e.ColumnIndex].Name; var txt=Convert.ToString(e.Value);
-        if (name=="colInstitutions") { e.Value=ParseHelpers.ParseInstitutionFlags(txt); e.ParsingApplied=true; }
-        else if (name=="colCategories") { e.Value=ParseHelpers.ParseCategoryFlags(txt); e.ParsingApplied=true; }
-        else if (name=="colReporting") { e.Value=ParseHelpers.ParseReporting(txt); e.ParsingApplied=true; }
-        else if (name=="colIsEntity") { e.Value=ParseHelpers.ParseNullableBool(txt); e.ParsingApplied=true; }
-        else if (name=="colParent") { e.Value=ParseHelpers.ParseParent(txt); e.ParsingApplied=true; }
-    };
-}
-
---------------------------------------------------
-private async Task<List<TierRow>> LoadCsvAsync(string path, System.Threading.CancellationToken ct)
-{
-    return await Task.Run(() =>
-    {
-        var result = new List<TierRow>();
-        using (var csv = new CsvReader(path, null))
-        {
-            string[] header=null; int line=0;
-            int iMnemonic=-1,iInst=-1,iCat=-1,iRep=-1,iEnt=-1,iPar=-1;
-
-            foreach (var row in csv.ReadRows())
-            {
-                ct.ThrowIfCancellationRequested();
-                line++;
-
-                if (line==1)
-                {
-                    header=row.Select(h=>(h??string.Empty).Trim()).ToArray();
-                    iMnemonic = Find(header,"Mnemonic");
-                    iInst     = Find(header,"InstitutionTypes"); if (iInst<0) iInst=Find(header,"InstitutionType");
-                    iCat      = Find(header,"Categories");       if (iCat<0) iCat=Find(header,"Category");
-                    iRep      = Find(header,"Reporting");
-                    iEnt      = Find(header,"IsEntity");
-                    iPar      = Find(header,"Parent");
-                    if (iMnemonic<0 || iInst<0)
-                        throw new InvalidDataException("Required columns missing: Mnemonic, InstitutionTypes.");
-                    continue;
-                }
-
-                string At(int idx){ if (idx<0||idx>=row.Length) return null; var v=row[idx]; return string.IsNullOrWhiteSpace(v)?null:v.Trim(); }
-
-                var mnemonic = At(iMnemonic);
-                var inst     = ParseHelpers.ParseInstitutionFlags(At(iInst));
-                var cats     = ParseHelpers.ParseCategoryFlags(At(iCat));
-                var reps     = ParseHelpers.ParseReporting(At(iRep));
-                var isEnt    = ParseHelpers.ParseNullableBool(At(iEnt));
-                var parent   = ParseHelpers.ParseParent(At(iPar));
-
-                if (string.IsNullOrWhiteSpace(mnemonic) || inst==InstitutionFlags.None)
-                {
-                    result.Add(new TierRow { Mnemonic=mnemonic, Institutions=inst, Status="Failed: invalid required fields" });
-                    continue;
-                }
-
-                result.Add(new TierRow {
-                    Mnemonic = mnemonic,
-                    Institutions = inst,
-                    Categories = cats,
-                    Reporting = reps,
-                    IsEntity = isEnt,
-                    Parent = parent,
-                    Status = "Pending"
-                });
-            }
-        }
-        return result;
-    }, ct).ConfigureAwait(false);
-}
-
-private static int Find(string[] header, string name)
-{
-    for (int i=0;i<header.Length;i++)
-        if (string.Equals(header[i], name, StringComparison.OrdinalIgnoreCase)) return i;
-    return -1;
-}
-
-----------------------------------------
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-
-namespace Tethys
-{
-    public static class SophisPartyFactory
-    {
-        // your real codes:
-        private static readonly Dictionary<ParentOption,int> ParentCodes = new Dictionary<ParentOption,int>
-        {
-            { ParentOption.INT,  10007538 },
-            { ParentOption.EXT,  10007539 },
-            { ParentOption.AFB,  10007540 },
-            { ParentOption.ISDA, 10007545 },
-        };
-
-        public static Task<string> CreateAsync(TierCreateRequest req, CancellationToken ct)
-        {
-            if (req == null) throw new ArgumentNullException("req");
-            if (string.IsNullOrWhiteSpace(req.Mnemonic)) throw new ArgumentException("Mnemonic is required.");
-            if (req.Institutions == InstitutionFlags.None) throw new ArgumentException("At least one Institution Type is required.");
-
-            return Task.Run(() =>
-            {
-                ct.ThrowIfCancellationRequested();
-
-                var dialog = new CSNThirdPartyDlg();
-                dialog.SetReference(req.Mnemonic);
-
-                // Institutions: set all present flags
-                var inst=req.Institutions;
-                if ((inst & InstitutionFlags.Counterparty)   !=0) dialog.SetCounterparty(true);
-                if ((inst & InstitutionFlags.Broker)         !=0) dialog.SetBroker(true);
-                if ((inst & InstitutionFlags.ClearingHouse)  !=0) dialog.SetclearingHouse(true);
-                if ((inst & InstitutionFlags.Group)          !=0) dialog.SetGroup(true);
-                if ((inst & InstitutionFlags.ExecutionVenue) !=0) dialog.SetExecutionVenue(true);
-                if ((inst & InstitutionFlags.Depositary)     !=0) dialog.SetDepository(true);
-                if ((inst & InstitutionFlags.Customer)       !=0) dialog.SetCustomer(true);
-                if ((inst & InstitutionFlags.PSET)           !=0) dialog.SetPSET(true);
-                if ((inst & InstitutionFlags.ClearingMember) !=0) dialog.SetClearingMember(true);
-                if ((inst & InstitutionFlags.TradeRepository)!=0) dialog.SetTradeRepositary(true);
-
-                // Categories: set all present flags
-                var cat=req.Categories;
-                if ((cat & CategoryFlags.Corporate)   !=0) dialog.SetCorporate(true);
-                if ((cat & CategoryFlags.Exchange)    !=0) dialog.SetExchange(true);
-                if ((cat & CategoryFlags.Institution) !=0) dialog.SetInstitution(true);
-                if ((cat & CategoryFlags.Bank)        !=0) dialog.SetBank(true);
-                if ((cat & CategoryFlags.Other)       !=0) dialog.Setother(true);
-
-                // Reporting flags
-                var rep=req.Reporting;
-                if ((rep & ReportingOptions.GrossPrice)   !=0) dialog.SetGrossPrice(true);
-                if ((rep & ReportingOptions.AveragePrice) !=0) dialog.SetAveragePrice(true);
-                if ((rep & ReportingOptions.MarketTax)    !=0) dialog.SetMarketTax(true);
-
-                // Is entity
-                if (req.IsEntity.HasValue) dialog.SetEntity(req.IsEntity.Value);
-
-                // Parent -> integer code
-                if (req.Parent != ParentOption.None)
-                {
-                    int code;
-                    if (ParentCodes.TryGetValue(req.Parent, out code)) dialog.SetParent(code);
-                }
-
-                return dialog.Save();
-            }, ct);
-        }
-    }
-}
-----------------------------
-var req = new TierCreateRequest
-{
-    Mnemonic     = row.Mnemonic,
-    Institutions = row.Institutions,
-    Categories   = row.Categories,
-    Reporting    = row.Reporting,
-    IsEntity     = row.IsEntity,
-    Parent       = row.Parent
+    new Item<bool?>{ Text = "",      Value = null  },
+    new Item<bool?>{ Text = "True",  Value = true  },
+    new Item<bool?>{ Text = "False", Value = false },
 };
-var indent = await SophisPartyFactory.CreateAsync(req, token);
 
------------------------------
-Mnemonic,InstitutionTypes,Categories,Reporting,IsEntity,Parent
-ACC_PAY,Counterparty|Depositary,,GrossPrice|AveragePrice,true,INT
-ACC_REC,Customer,Institution|Bank,MarketTax,false,EXT
-HR_MAIN,Group|ExecutionVenue,Corporate,AveragePrice,,ISDA
-FIN_TAX,Group,Other,,no,
-SUP_EU,Broker,Exchange,GrossPrice|MarketTax,yes,AFB
+var colIsEntity = new DataGridViewComboBoxColumn
+{
+    Name = "colIsEntity",
+    HeaderText = "Is Entity",
+    DataPropertyName = "IsEntity",                  // TierRow.IsEntity (bool?)
+    DataSource = isEntityItems,                     // <-- typed datasource
+    DisplayMember = "Text",
+    ValueMember = "Value",
+    ValueType = typeof(bool),                       // value type of the property
+    DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+    FlatStyle = FlatStyle.Standard,
+    Width = 90
+};
+dataGridView1.Columns.Add(colIsEntity);
+
+// --- Parent (ParentOption enum) ---
+var parentItems = new List<Item<ParentOption>>
+{
+    new Item<ParentOption>{ Text = "",     Value = ParentOption.None },
+    new Item<ParentOption>{ Text = "INT",  Value = ParentOption.INT  },
+    new Item<ParentOption>{ Text = "ISDA", Value = ParentOption.ISDA },
+    new Item<ParentOption>{ Text = "AFB",  Value = ParentOption.AFB  },
+    new Item<ParentOption>{ Text = "EXT",  Value = ParentOption.EXT  },
+};
+
+var colParent = new DataGridViewComboBoxColumn
+{
+    Name = "colParent",
+    HeaderText = "Parent",
+    DataPropertyName = "Parent",                     // TierRow.Parent (ParentOption)
+    DataSource = parentItems,                        // <-- typed datasource
+    DisplayMember = "Text",
+    ValueMember = "Value",
+    ValueType = typeof(ParentOption),
+    DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+    FlatStyle = FlatStyle.Standard,
+    Width = 120
+};
+dataGridView1.Columns.Add(colParent);
+
+-------------------
+
+
+row.IsEntity = ParseHelpers.ParseNullableBool(entTxt); // bool?
+row.Parent   = ParseHelpers.ParseParent(parTxt);       // ParentOption (INT/ISDA/AFB/EXT)
