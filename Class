@@ -1,20 +1,33 @@
-using System;
-using System.ComponentModel;
-
-namespace YourApp.Domain
+namespace Tethys
 {
-    public enum InstitutionType
+    [System.Flags]
+    public enum InstitutionFlags
     {
-        Counterparty, Broker, ClearingHouse, Group, ExecutionVenue, Depository,
-        Customer, PSET, ClearingMember, TradeRepository
+        None           = 0,
+        Counterparty   = 1 << 0,
+        Broker         = 1 << 1,
+        ClearingHouse  = 1 << 2,
+        Group          = 1 << 3,
+        ExecutionVenue = 1 << 4,
+        Depositary     = 1 << 5,
+        Customer       = 1 << 6,
+        PSET           = 1 << 7,
+        ClearingMember = 1 << 8,
+        TradeRepository= 1 << 9
     }
 
-    public enum Category
+    [System.Flags]
+    public enum CategoryFlags
     {
-        Corporate, Exchange, Institution, Bank, Other
+        None          = 0,
+        Corporate     = 1 << 0,
+        Exchange      = 1 << 1,
+        Institution   = 1 << 2,
+        Bank          = 1 << 3,
+        Other         = 1 << 4
     }
 
-    [Flags]
+    [System.Flags]
     public enum ReportingOptions
     {
         None         = 0,
@@ -25,841 +38,428 @@ namespace YourApp.Domain
 
     public enum ParentOption
     {
-        None, Internal, All, ESDA, EXT
+        None, INT, ISDA, AFB, EXT
     }
+}
 
-    /// <summary>ViewModel / DTO for a Tier row.</summary>
-    public class TierRow : INotifyPropertyChanged
+-------------------------
+using System.ComponentModel;
+
+namespace Tethys
+{
+    public sealed class TierRow : INotifyPropertyChanged
     {
         private string _mnemonic;
-        private InstitutionType? _institutionType; // required
-        private Category? _category;
-        private ReportingOptions _reporting;
-        private bool? _isEntity;
-        private ParentOption _parent;
+        private InstitutionFlags _institutions;   // required: != None
+        private CategoryFlags _categories;        // optional
+        private ReportingOptions _reporting;      // optional
+        private bool? _isEntity;                  // optional
+        private ParentOption _parent;             // optional (None)
 
         private string _status;
         private string _indentId;
         private string _error;
 
-        public string Mnemonic
-        {
-            get => _mnemonic; set { _mnemonic = value; OnChanged("Mnemonic"); }
-        }
+        public string Mnemonic { get => _mnemonic; set { _mnemonic = value; OnChanged("Mnemonic"); } }
+        public InstitutionFlags Institutions { get => _institutions; set { _institutions = value; OnChanged("Institutions"); } }
+        public CategoryFlags Categories { get => _categories; set { _categories = value; OnChanged("Categories"); } }
+        public ReportingOptions Reporting { get => _reporting; set { _reporting = value; OnChanged("Reporting"); } }
+        public bool? IsEntity { get => _isEntity; set { _isEntity = value; OnChanged("IsEntity"); } }
+        public ParentOption Parent { get => _parent; set { _parent = value; OnChanged("Parent"); } }
 
-        public InstitutionType? InstitutionType
-        {
-            get => _institutionType; set { _institutionType = value; OnChanged("InstitutionType"); }
-        }
-
-        public Category? Category
-        {
-            get => _category; set { _category = value; OnChanged("Category"); }
-        }
-
-        public ReportingOptions Reporting
-        {
-            get => _reporting; set { _reporting = value; OnChanged("Reporting"); }
-        }
-
-        public bool? IsEntity
-        {
-            get => _isEntity; set { _isEntity = value; OnChanged("IsEntity"); }
-        }
-
-        public ParentOption Parent
-        {
-            get => _parent; set { _parent = value; OnChanged("Parent"); }
-        }
-
-        public string Status
-        {
-            get => _status; set { _status = value; OnChanged("Status"); }
-        }
-
-        public string IndentId
-        {
-            get => _indentId; set { _indentId = value; OnChanged("IndentId"); }
-        }
-
-        /// <summary>Full error text (optional, not shown in Status).</summary>
-        public string Error
-        {
-            get => _error; set { _error = value; OnChanged("Error"); }
-        }
+        public string Status { get => _status; set { _status = value; OnChanged("Status"); } }
+        public string IndentId { get => _indentId; set { _indentId = value; OnChanged("IndentId"); } }
+        public string Error { get => _error; set { _error = value; OnChanged("Error"); } }
 
         public event PropertyChangedEventHandler PropertyChanged;
-        private void OnChanged(string name) =>
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }
----------------------------------
-
+-------------------------
+namespace Tethys
+{
+    public sealed class TierCreateRequest
+    {
+        public string Mnemonic { get; set; }                  // required
+        public InstitutionFlags Institutions { get; set; }    // required (not None)
+        public CategoryFlags Categories { get; set; }         // optional
+        public ReportingOptions Reporting { get; set; }       // optional
+        public bool? IsEntity { get; set; }                   // optional
+        public ParentOption Parent { get; set; }              // optional (None)
+    }
+}
+----------------------------
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using YourApp.Domain;
+using Tethys;
 
-namespace YourApp.Utils
+namespace Tethys.Utils
 {
     internal static class ParseHelpers
     {
-        private static string NormalizeKey(string s)
+        private static string Key(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return string.Empty;
             return new string(s.Where(ch => !char.IsWhiteSpace(ch) && ch != '-' && ch != '_').ToArray())
                 .ToLowerInvariant();
         }
 
-        private static readonly Dictionary<string, InstitutionType> _instAliases =
-            new Dictionary<string, InstitutionType>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"counterparty", InstitutionType.Counterparty},
-                {"cp",           InstitutionType.Counterparty},
-                {"vendor",       InstitutionType.Counterparty},
-                {"broker",       InstitutionType.Broker},
-                {"clearinghouse",InstitutionType.ClearingHouse},
-                {"clearing house",InstitutionType.ClearingHouse},
-                {"group",        InstitutionType.Group},
-                {"executionvenue", InstitutionType.ExecutionVenue},
-                {"execution venue",InstitutionType.ExecutionVenue},
-                {"depository",   InstitutionType.Depository},
-                {"customer",     InstitutionType.Customer},
-                {"pset",         InstitutionType.PSET},
-                {"clearingmember", InstitutionType.ClearingMember},
-                {"clearing member",InstitutionType.ClearingMember},
-                {"traderepository", InstitutionType.TradeRepository},
-                {"trade repository",InstitutionType.TradeRepository},
-            };
-
-        private static readonly Dictionary<string, Category> _catAliases =
-            new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"corporate",  Category.Corporate},
-                {"exchange",   Category.Exchange},
-                {"institution",Category.Institution},
-                {"bank",       Category.Bank},
-                {"other",      Category.Other},
-            };
-
-        private static readonly Dictionary<string, ReportingOptions> _repAliases =
-            new Dictionary<string, ReportingOptions>(StringComparer.OrdinalIgnoreCase)
-            {
-                {"grossprice",   ReportingOptions.GrossPrice},
-                {"gross price",  ReportingOptions.GrossPrice},
-                {"averageprice", ReportingOptions.AveragePrice},
-                {"average price",ReportingOptions.AveragePrice},
-                {"markettax",    ReportingOptions.MarketTax},
-                {"market tax",   ReportingOptions.MarketTax},
-            };
-
-        public static bool TryInstitution(string s, out InstitutionType value)
+        private static IEnumerable<string> Tokens(string s)
         {
-            value = default(InstitutionType);
-            if (string.IsNullOrWhiteSpace(s)) return false;
-            return _instAliases.TryGetValue(NormalizeKey(s), out value);
+            if (string.IsNullOrWhiteSpace(s)) yield break;
+            foreach (var t in s.Split(new[] { '|', ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                yield return t.Trim();
         }
 
-        public static bool TryCategory(string s, out Category value)
+        // Aliases
+        private static readonly Dictionary<string, InstitutionFlags> _inst =
+            new Dictionary<string, InstitutionFlags>(StringComparer.OrdinalIgnoreCase)
+            {
+                {"counterparty", InstitutionFlags.Counterparty}, {"cp", InstitutionFlags.Counterparty}, {"vendor", InstitutionFlags.Counterparty},
+                {"broker", InstitutionFlags.Broker},
+                {"clearinghouse", InstitutionFlags.ClearingHouse}, {"clearing house", InstitutionFlags.ClearingHouse},
+                {"group", InstitutionFlags.Group},
+                {"executionvenue", InstitutionFlags.ExecutionVenue}, {"execution venue", InstitutionFlags.ExecutionVenue},
+                {"depository", InstitutionFlags.Depositary}, {"depositary", InstitutionFlags.Depositary},
+                {"customer", InstitutionFlags.Customer}, {"client", InstitutionFlags.Customer},
+                {"pset", InstitutionFlags.PSET},
+                {"clearingmember", InstitutionFlags.ClearingMember}, {"clearing member", InstitutionFlags.ClearingMember},
+                {"traderepository", InstitutionFlags.TradeRepository}, {"trade repository", InstitutionFlags.TradeRepository},
+            };
+
+        private static readonly Dictionary<string, CategoryFlags> _cat =
+            new Dictionary<string, CategoryFlags>(StringComparer.OrdinalIgnoreCase)
+            {
+                {"corporate", CategoryFlags.Corporate},
+                {"exchange", CategoryFlags.Exchange},
+                {"institution", CategoryFlags.Institution},
+                {"bank", CategoryFlags.Bank},
+                {"other", CategoryFlags.Other},
+            };
+
+        private static readonly Dictionary<string, ReportingOptions> _rep =
+            new Dictionary<string, ReportingOptions>(StringComparer.OrdinalIgnoreCase)
+            {
+                {"grossprice", ReportingOptions.GrossPrice}, {"gross price", ReportingOptions.GrossPrice},
+                {"averageprice", ReportingOptions.AveragePrice}, {"average price", ReportingOptions.AveragePrice},
+                {"markettax", ReportingOptions.MarketTax}, {"market tax", ReportingOptions.MarketTax},
+            };
+
+        public static InstitutionFlags ParseInstitutionFlags(string s)
         {
-            value = default(Category);
-            if (string.IsNullOrWhiteSpace(s)) return false;
-            return _catAliases.TryGetValue(NormalizeKey(s), out value);
+            var f = InstitutionFlags.None;
+            foreach (var t in Tokens(s))
+            {
+                InstitutionFlags v; if (_inst.TryGetValue(Key(t), out v)) f |= v;
+            }
+            return f;
+        }
+
+        public static CategoryFlags ParseCategoryFlags(string s)
+        {
+            var f = CategoryFlags.None;
+            foreach (var t in Tokens(s))
+            {
+                CategoryFlags v; if (_cat.TryGetValue(Key(t), out v)) f |= v;
+            }
+            return f;
         }
 
         public static ReportingOptions ParseReporting(string s)
         {
-            if (string.IsNullOrWhiteSpace(s)) return ReportingOptions.None;
-
-            var tokens = s.Split(new[] { ',', ';', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            ReportingOptions opts = ReportingOptions.None;
-
-            foreach (var t in tokens)
+            var f = ReportingOptions.None;
+            foreach (var t in Tokens(s))
             {
-                ReportingOptions flag;
-                if (_repAliases.TryGetValue(NormalizeKey(t), out flag))
-                    opts |= flag;
+                ReportingOptions v; if (_rep.TryGetValue(Key(t), out v)) f |= v;
             }
-            return opts;
+            return f;
         }
 
         public static bool? ParseNullableBool(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return (bool?)null;
             var k = s.Trim().ToLowerInvariant();
-            if (k == "true" || k == "t" || k == "1" || k == "yes" || k == "y") return true;
-            if (k == "false"|| k == "f" || k == "0" || k == "no"  || k == "n") return false;
+            if (k=="true"||k=="t"||k=="1"||k=="yes"||k=="y") return true;
+            if (k=="false"||k=="f"||k=="0"||k=="no"||k=="n") return false;
             return (bool?)null;
         }
 
         public static ParentOption ParseParent(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return ParentOption.None;
-            var k = NormalizeKey(s);
-            if (k == "internal") return ParentOption.Internal;
-            if (k == "all")      return ParentOption.All;
-            if (k == "esda")     return ParentOption.ESDA; // accepts "E-S-D-A"
-            if (k == "ext" || k == "external") return ParentOption.EXT;
-            return ParentOption.None; // unknown -> empty
+            var k = Key(s);
+            if (k=="int"||k=="internal") return ParentOption.INT;
+            if (k=="isda") return ParentOption.ISDA;
+            if (k=="afb")  return ParentOption.AFB;
+            if (k=="ext"||k=="external") return ParentOption.EXT;
+            return ParentOption.None;
+        }
+
+        // Pretty printer for flags -> "A|B|C"
+        public static string FormatFlags<TEnum>(TEnum value) where TEnum : struct, IConvertible
+        {
+            var type = typeof(TEnum);
+            var zero = Convert.ToInt64(Activator.CreateInstance(type));
+            var v    = Convert.ToInt64(value);
+            if (v == zero) return string.Empty;
+
+            var names = Enum.GetValues(type).Cast<object>()
+                .Where(x => Convert.ToInt64(x) != zero && (v & Convert.ToInt64(x)) == Convert.ToInt64(x))
+                .Select(x => x.ToString());
+            return string.Join("|", names);
         }
     }
 }
-
-----TierCreateRequest.cs in commun -------------
-using YourApp.Domain;
-
-namespace YourApp.Domain
+----------------------------------
+private static void ConfigureGridColumns(DataGridView grid)
 {
-    /// <summary>Data passed to TierFactories.CreateAsync for a single tier.</summary>
-    public sealed class TierCreateRequest
-    {
-        public string Mnemonic { get; set; }                    // required
-        public InstitutionType InstitutionType { get; set; }    // required
+    grid.AutoGenerateColumns = false;
+    grid.Columns.Clear();
+    grid.RowHeadersVisible = false;
+    grid.AllowUserToAddRows = false;
+    grid.AllowUserToDeleteRows = false;
+    grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
 
-        public Category? Category { get; set; }                 // optional
-        public ReportingOptions Reporting { get; set; }         // optional (flags)
-        public bool? IsEntity { get; set; }                     // optional
-        public ParentOption Parent { get; set; }                // optional (None if empty)
-    }
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colMnemonic", HeaderText="Mnemonic", DataPropertyName="Mnemonic", Width=140
+    });
+
+    // Multi-select fields shown as text ("A|B|C")
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colInstitutions", HeaderText="Institution Types (pipe-separated)",
+        DataPropertyName="Institutions", Width=260
+    });
+
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colCategories", HeaderText="Categories (pipe-separated)",
+        DataPropertyName="Categories", Width=220
+    });
+
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colReporting", HeaderText="Reporting (GrossPrice|AveragePrice|MarketTax)",
+        DataPropertyName="Reporting", Width=260
+    });
+
+    // IsEntity (nullable) combo
+    var boolCol = new DataGridViewComboBoxColumn
+    {
+        Name="colIsEntity", HeaderText="Is Entity", DataPropertyName="IsEntity",
+        DisplayStyle=DataGridViewComboBoxDisplayStyle.DropDownButton, FlatStyle=FlatStyle.Standard, Width=90
+    };
+    boolCol.Items.Add(""); boolCol.Items.Add("True"); boolCol.Items.Add("False");
+    grid.Columns.Add(boolCol);
+
+    // Parent combo
+    var parentCol = new DataGridViewComboBoxColumn
+    {
+        Name="colParent", HeaderText="Parent", DataPropertyName="Parent",
+        DisplayStyle=DataGridViewComboBoxDisplayStyle.DropDownButton, FlatStyle=FlatStyle.Standard, Width=120
+    };
+    parentCol.Items.AddRange(new object[] { "", "INT", "ISDA", "AFB", "EXT" });
+    grid.Columns.Add(parentCol);
+
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colStatus", HeaderText="Status", DataPropertyName="Status", ReadOnly=true, Width=200
+    });
+    grid.Columns.Add(new DataGridViewTextBoxColumn
+    {
+        Name="colIndent", HeaderText="Indent", DataPropertyName="IndentId", ReadOnly=true, Width=150
+    });
+
+    // Render flags as "A|B|C"
+    grid.CellFormatting += (s,e) =>
+    {
+        var g=(DataGridView)s; var name=g.Columns[e.ColumnIndex].Name;
+        if (name=="colInstitutions" && e.Value is InstitutionFlags)
+        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((InstitutionFlags)e.Value); e.FormattingApplied=true; }
+        else if (name=="colCategories" && e.Value is CategoryFlags)
+        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((CategoryFlags)e.Value); e.FormattingApplied=true; }
+        else if (name=="colReporting" && e.Value is ReportingOptions)
+        { e.Value=Tethys.Utils.ParseHelpers.FormatFlags((ReportingOptions)e.Value); e.FormattingApplied=true; }
+        else if (name=="colParent" && e.Value is ParentOption)
+        { var p=(ParentOption)e.Value; e.Value=p==ParentOption.None?"":p.ToString(); e.FormattingApplied=true; }
+        else if (name=="colIsEntity")
+        {
+            bool? v=null; if (e.Value is bool) v=(bool)e.Value; else if (e.Value is bool?) v=(bool?)e.Value;
+            e.Value=v.HasValue?(v.Value?"True":"False"):""; e.FormattingApplied=true;
+        }
+    };
+
+    // Parse edited text back into flags/bool/parent
+    grid.CellParsing += (s,e) =>
+    {
+        var g=(DataGridView)s; var name=g.Columns[e.ColumnIndex].Name; var txt=Convert.ToString(e.Value);
+        if (name=="colInstitutions") { e.Value=ParseHelpers.ParseInstitutionFlags(txt); e.ParsingApplied=true; }
+        else if (name=="colCategories") { e.Value=ParseHelpers.ParseCategoryFlags(txt); e.ParsingApplied=true; }
+        else if (name=="colReporting") { e.Value=ParseHelpers.ParseReporting(txt); e.ParsingApplied=true; }
+        else if (name=="colIsEntity") { e.Value=ParseHelpers.ParseNullableBool(txt); e.ParsingApplied=true; }
+        else if (name=="colParent") { e.Value=ParseHelpers.ParseParent(txt); e.ParsingApplied=true; }
+    };
 }
---------------
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using YourApp.Domain;
-using YourApp.Utils;
 
-namespace YourApp.Controls
+--------------------------------------------------
+private async Task<List<TierRow>> LoadCsvAsync(string path, System.Threading.CancellationToken ct)
 {
-    public partial class TiersControl : UserControl
+    return await Task.Run(() =>
     {
-        private readonly BindingList<TierRow> _rows = new BindingList<TierRow>();
-        private CancellationTokenSource _cts;
-
-        public TiersControl()
+        var result = new List<TierRow>();
+        using (var csv = new CsvReader(path, null))
         {
-            InitializeComponent();
+            string[] header=null; int line=0;
+            int iMnemonic=-1,iInst=-1,iCat=-1,iRep=-1,iEnt=-1,iPar=-1;
 
-            dataGridView1.AutoGenerateColumns = false;
-            dataGridView1.Columns.Clear();
-            ConfigureGridColumns(dataGridView1);
-
-            dataGridView1.DataSource = _rows;
-            dataGridView1.DataError += (s, e2) => { e2.ThrowException = false; };
-
-            btnUpload.Click += btnUpload_Click;
-            btnSave.Click += btnSave_Click;
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            try
-            {
-                typeof(DataGridView).InvokeMember("DoubleBuffered",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance |
-                    System.Reflection.BindingFlags.SetProperty,
-                    null, dataGridView1, new object[] { true });
-            }
-            catch { }
-        }
-
-        // ------------ Ready-to-use column initializer ------------
-        private static void ConfigureGridColumns(DataGridView grid)
-        {
-            grid.RowHeadersVisible = false;
-            grid.AllowUserToAddRows = false;
-            grid.AllowUserToDeleteRows = false;
-            grid.BackgroundColor = System.Drawing.SystemColors.Window;
-            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-
-            // Mnemonic
-            grid.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "colMnemonic",
-                HeaderText = "Mnemonic",
-                DataPropertyName = "Mnemonic",
-                Width = 140
-            });
-
-            // InstitutionType (nullable enum) -> ComboBox with blank (required, but null allowed in UI until save)
-            var colInstitution = new DataGridViewComboBoxColumn
-            {
-                Name = "colInstitutionType",
-                HeaderText = "Institution Type",
-                DataPropertyName = "InstitutionType",
-                Width = 180,
-                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-                FlatStyle = FlatStyle.Standard
-            };
-            colInstitution.Items.Add(""); // null
-            colInstitution.Items.AddRange(Enum.GetNames(typeof(InstitutionType)));
-            grid.Columns.Add(colInstitution);
-
-            // Category (optional) -> ComboBox with blank
-            var colCategory = new DataGridViewComboBoxColumn
-            {
-                Name = "colCategory",
-                HeaderText = "Category",
-                DataPropertyName = "Category",
-                Width = 140,
-                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-                FlatStyle = FlatStyle.Standard
-            };
-            colCategory.Items.Add("");
-            colCategory.Items.AddRange(Enum.GetNames(typeof(Category)));
-            grid.Columns.Add(colCategory);
-
-            // Reporting (flags) -> text column; shows "GrossPrice|AveragePrice|MarketTax"
-            var colReporting = new DataGridViewTextBoxColumn
-            {
-                Name = "colReporting",
-                HeaderText = "Reporting (GrossPrice|AveragePrice|MarketTax)",
-                DataPropertyName = "Reporting",
-                Width = 260
-            };
-            grid.Columns.Add(colReporting);
-
-            grid.CellFormatting += (s, e) =>
-            {
-                var g = (DataGridView)s;
-
-                if (g.Columns[e.ColumnIndex].Name == "colReporting" && e.Value is ReportingOptions)
-                {
-                    var r = (ReportingOptions)e.Value;
-                    if (r == ReportingOptions.None) { e.Value = ""; e.FormattingApplied = true; return; }
-
-                    var parts = Enum.GetValues(typeof(ReportingOptions))
-                        .Cast<ReportingOptions>()
-                        .Where(f => f != ReportingOptions.None && (r & f) != 0)
-                        .Select(f => f.ToString());
-
-                    e.Value = string.Join("|", parts);
-                    e.FormattingApplied = true;
-                }
-
-                if (g.Columns[e.ColumnIndex].Name == "colIsEntity")
-                {
-                    bool? v = null;
-                    if (e.Value is bool) v = (bool)e.Value;
-                    if (e.Value is bool?) v = (bool?)e.Value;
-                    e.Value = v.HasValue ? (v.Value ? "True" : "False") : "";
-                    e.FormattingApplied = true;
-                }
-
-                if (g.Columns[e.ColumnIndex].Name == "colParent" && e.Value is ParentOption)
-                {
-                    var p = (ParentOption)e.Value;
-                    e.Value = p == ParentOption.None ? "" : p.ToString();
-                    e.FormattingApplied = true;
-                }
-            };
-
-            grid.CellParsing += (s, e) =>
-            {
-                var g = (DataGridView)s;
-
-                if (g.Columns[e.ColumnIndex].Name == "colReporting")
-                {
-                    var text = Convert.ToString(e.Value);
-                    e.Value = ParseHelpers.ParseReporting(text);
-                    e.ParsingApplied = true;
-                }
-                if (g.Columns[e.ColumnIndex].Name == "colIsEntity")
-                {
-                    var txt = Convert.ToString(e.Value);
-                    e.Value = ParseHelpers.ParseNullableBool(txt);
-                    e.ParsingApplied = true;
-                }
-                if (g.Columns[e.ColumnIndex].Name == "colParent")
-                {
-                    var txt = Convert.ToString(e.Value);
-                    e.Value = ParseHelpers.ParseParent(txt);
-                    e.ParsingApplied = true;
-                }
-            };
-
-            // IsEntity (nullable) -> ComboBox (blank/True/False)
-            var colIsEntity = new DataGridViewComboBoxColumn
-            {
-                Name = "colIsEntity",
-                HeaderText = "Is Entity",
-                DataPropertyName = "IsEntity",
-                Width = 90,
-                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-                FlatStyle = FlatStyle.Standard
-            };
-            colIsEntity.Items.Add("");
-            colIsEntity.Items.Add("True");
-            colIsEntity.Items.Add("False");
-            grid.Columns.Add(colIsEntity);
-
-            // Parent (optional limited)
-            var colParent = new DataGridViewComboBoxColumn
-            {
-                Name = "colParent",
-                HeaderText = "Parent",
-                DataPropertyName = "Parent",
-                Width = 120,
-                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-                FlatStyle = FlatStyle.Standard
-            };
-            colParent.Items.Add("");
-            colParent.Items.AddRange(new object[] { "Internal", "All", "ESDA", "EXT" });
-            grid.Columns.Add(colParent);
-
-            // Status (read-only)
-            grid.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "colStatus",
-                HeaderText = "Status",
-                DataPropertyName = "Status",
-                ReadOnly = true,
-                Width = 200
-            });
-
-            // Indent (read-only)
-            grid.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "colIndent",
-                HeaderText = "Indent",
-                DataPropertyName = "IndentId",
-                ReadOnly = true,
-                Width = 150
-            });
-        }
-        // ---------------------------------------------------------
-
-        private async void btnUpload_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                using (var ofd = new OpenFileDialog
-                {
-                    Title = "Select CSV file",
-                    Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-                    RestoreDirectory = true
-                })
-                {
-                    if (ofd.ShowDialog(this) != DialogResult.OK) return;
-
-                    txtFilePath.Text = ofd.FileName;
-
-                    using (var cts = new CancellationTokenSource())
-                    {
-                        var rows = await LoadCsvAsync(ofd.FileName, cts.Token).ConfigureAwait(true);
-                        _rows.Clear();
-                        foreach (var r in rows) _rows.Add(r);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Failed to load CSV:\r\n" + ex.Message,
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private async void btnSave_Click(object sender, EventArgs e)
-        {
-            if (_rows.Count == 0)
-            {
-                MessageBox.Show(this, "No rows to process.", "Info",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            var invalids = _rows.Where(r => string.IsNullOrWhiteSpace(r.Mnemonic) || !r.InstitutionType.HasValue).ToList();
-            if (invalids.Count > 0)
-            {
-                foreach (var r in invalids) r.Status = "Failed: missing Mnemonic/InstitutionType";
-                MessageBox.Show(this, $"There are {invalids.Count} invalid rows. Fix them or remove before saving.",
-                    "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            btnSave.Enabled = false;
-            btnUpload.Enabled = false;
-
-            _cts?.Dispose();
-            _cts = new CancellationTokenSource();
-            var token = _cts.Token;
-
-            using (var wait = new WaitingForm())
-            {
-                wait.TextLine = "Creating tiers…";
-                wait.Max = _rows.Count;
-                wait.CanCancel = true;
-                wait.OnCancel = () => _cts?.Cancel();
-                wait.Show(this);
-
-                try
-                {
-                    var dop = Math.Max(1, Environment.ProcessorCount - 1);
-                    using (var gate = new System.Threading.SemaphoreSlim(dop))
-                    {
-                        int completed = 0;
-                        var tasks = new List<Task>();
-
-                        foreach (var row in _rows)
-                        {
-                            await gate.WaitAsync(token).ConfigureAwait(true);
-
-                            var t = Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    token.ThrowIfCancellationRequested();
-                                    UpdateRow(row, "Working…", null);
-
-                                    var indent = await CreateTierWithRetryAsync(row, token).ConfigureAwait(false);
-                                    UpdateRow(row, "Created", indent);
-                                }
-                                catch (OperationCanceledException)
-                                {
-                                    UpdateRow(row, "Canceled", null);
-                                }
-                                catch (Exception exRow)
-                                {
-                                    var msg = exRow.Message ?? "Error";
-                                    if (msg.Length > 200) msg = msg.Substring(0, 197) + "…";
-                                    row.Error = exRow.ToString();
-                                    UpdateRow(row, "Failed: " + msg, null);
-                                }
-                                finally
-                                {
-                                    System.Threading.Interlocked.Increment(ref completed);
-                                    wait.SafeStep(completed);
-                                    gate.Release();
-                                }
-                            }, token);
-
-                            tasks.Add(t);
-                        }
-
-                        await Task.WhenAll(tasks).ConfigureAwait(true);
-                    }
-
-                    var ok = _rows.Count(r => string.Equals(r.Status, "Created", StringComparison.OrdinalIgnoreCase));
-                    var ko = _rows.Count(r => r.Status != null && r.Status.StartsWith("Failed", StringComparison.OrdinalIgnoreCase));
-                    var ca = _rows.Count(r => string.Equals(r.Status, "Canceled", StringComparison.OrdinalIgnoreCase));
-
-                    MessageBox.Show(this, $"Done.\r\nCreated: {ok}\r\nFailed: {ko}\r\nCanceled: {ca}", "Summary",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, "An error occurred:\r\n" + ex.Message,
-                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-                finally
-                {
-                    wait.Close();
-                    btnSave.Enabled = true;
-                    btnUpload.Enabled = true;
-                    _cts.Dispose();
-                    _cts = null;
-                }
-            }
-        }
-
-        // ---------------- CSV loader ----------------
-        private async Task<List<TierRow>> LoadCsvAsync(string path, CancellationToken ct)
-        {
-            return await Task.Run(() =>
-            {
-                var result = new List<TierRow>();
-
-                using (var csv = new CsvReader(path, null))
-                {
-                    string[] header = null;
-                    int line = 0;
-
-                    int iMnemonic = -1, iInstitution = -1, iCategory = -1, iReporting = -1, iIsEntity = -1, iParent = -1;
-
-                    foreach (var row in csv.ReadRows())
-                    {
-                        ct.ThrowIfCancellationRequested();
-                        line++;
-
-                        if (line == 1)
-                        {
-                            header = row.Select(h => (h ?? string.Empty).Trim()).ToArray();
-
-                            iMnemonic   = Find(header, "Mnemonic");
-                            iInstitution= Find(header, "InstitutionType");
-                            iCategory   = Find(header, "Category");
-                            iReporting  = Find(header, "Reporting");
-                            iIsEntity   = Find(header, "IsEntity");
-                            iParent     = Find(header, "Parent");
-
-                            if (iMnemonic < 0 || iInstitution < 0)
-                                throw new InvalidDataException("Required columns missing: Mnemonic, InstitutionType.");
-                            continue;
-                        }
-
-                        string At(int idx)
-                        {
-                            if (idx < 0 || idx >= row.Length) return null;
-                            var v = row[idx];
-                            return string.IsNullOrWhiteSpace(v) ? null : v.Trim();
-                        }
-
-                        var mnemonic = At(iMnemonic);
-                        var instStr  = At(iInstitution);
-
-                        InstitutionType inst;
-                        if (string.IsNullOrWhiteSpace(mnemonic) || !ParseHelpers.TryInstitution(instStr, out inst))
-                        {
-                            result.Add(new TierRow
-                            {
-                                Mnemonic = mnemonic,
-                                InstitutionType = null,
-                                Status = "Failed: invalid required fields",
-                                Error = $"Line {line}: Mnemonic='{mnemonic ?? "<empty>"}', InstitutionType='{instStr ?? "<empty>"}'."
-                            });
-                            continue;
-                        }
-
-                        var catStr = At(iCategory);
-                        var repStr = At(iReporting);
-                        var entStr = At(iIsEntity);
-                        var parStr = At(iParent);
-
-                        Category cVal;
-                        Category? cat = ParseHelpers.TryCategory(catStr, out cVal) ? (Category?)cVal : null;
-                        var reporting = ParseHelpers.ParseReporting(repStr);
-                        var isEntity  = ParseHelpers.ParseNullableBool(entStr);
-                        var parent    = ParseHelpers.ParseParent(parStr);
-
-                        result.Add(new TierRow
-                        {
-                            Mnemonic        = mnemonic,
-                            InstitutionType = inst,
-                            Category        = cat,
-                            Reporting       = reporting,
-                            IsEntity        = isEntity,
-                            Parent          = parent,
-                            Status          = "Pending",
-                            IndentId        = null
-                        });
-                    }
-                }
-
-                return result;
-            }, ct).ConfigureAwait(false);
-        }
-
-        private static int Find(string[] header, string name)
-        {
-            for (int i = 0; i < header.Length; i++)
-                if (string.Equals(header[i], name, StringComparison.OrdinalIgnoreCase)) return i;
-            return -1;
-        }
-
-        // ---------------- Factory call w/ retry ----------------
-        private static async Task<string> CreateTierAsync(TierRow row, CancellationToken ct)
-        {
-            if (row == null) throw new ArgumentNullException("row");
-            if (string.IsNullOrWhiteSpace(row.Mnemonic)) throw new InvalidOperationException("Mnemonic is required.");
-            if (!row.InstitutionType.HasValue) throw new InvalidOperationException("InstitutionType is required.");
-
-            var req = new TierCreateRequest
-            {
-                Mnemonic       = row.Mnemonic,
-                InstitutionType= row.InstitutionType.Value,
-                Category       = row.Category,
-                Reporting      = row.Reporting,
-                IsEntity       = row.IsEntity,
-                Parent         = row.Parent
-            };
-
-            // Single call to the factory — waits for completion
-            return await TierFactories.CreateAsync(req, ct).ConfigureAwait(false);
-        }
-
-        private static async Task<string> CreateTierWithRetryAsync(TierRow row, CancellationToken ct)
-        {
-            const int maxAttempts = 3;
-            int attempt = 0;
-            Exception last = null;
-            var rng = new Random(unchecked(Environment.TickCount * 397) ^ System.Threading.Thread.CurrentThread.ManagedThreadId);
-
-            while (attempt++ < maxAttempts)
+            foreach (var row in csv.ReadRows())
             {
                 ct.ThrowIfCancellationRequested();
-                try
-                {
-                    return await CreateTierAsync(row, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    last = ex;
-                    if (attempt >= maxAttempts) break;
-                    int baseMs = (int)(200 * Math.Pow(2, attempt - 1));
-                    int jitter = rng.Next(0, 150);
-                    await Task.Delay(baseMs + jitter, ct).ConfigureAwait(false);
-                }
-            }
-            throw last ?? new InvalidOperationException("Unknown error");
-        }
+                line++;
 
-        private void UpdateRow(TierRow row, string status, string indent)
-        {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action<TierRow, string, string>(UpdateRow), row, status, indent);
-                return;
+                if (line==1)
+                {
+                    header=row.Select(h=>(h??string.Empty).Trim()).ToArray();
+                    iMnemonic = Find(header,"Mnemonic");
+                    iInst     = Find(header,"InstitutionTypes"); if (iInst<0) iInst=Find(header,"InstitutionType");
+                    iCat      = Find(header,"Categories");       if (iCat<0) iCat=Find(header,"Category");
+                    iRep      = Find(header,"Reporting");
+                    iEnt      = Find(header,"IsEntity");
+                    iPar      = Find(header,"Parent");
+                    if (iMnemonic<0 || iInst<0)
+                        throw new InvalidDataException("Required columns missing: Mnemonic, InstitutionTypes.");
+                    continue;
+                }
+
+                string At(int idx){ if (idx<0||idx>=row.Length) return null; var v=row[idx]; return string.IsNullOrWhiteSpace(v)?null:v.Trim(); }
+
+                var mnemonic = At(iMnemonic);
+                var inst     = ParseHelpers.ParseInstitutionFlags(At(iInst));
+                var cats     = ParseHelpers.ParseCategoryFlags(At(iCat));
+                var reps     = ParseHelpers.ParseReporting(At(iRep));
+                var isEnt    = ParseHelpers.ParseNullableBool(At(iEnt));
+                var parent   = ParseHelpers.ParseParent(At(iPar));
+
+                if (string.IsNullOrWhiteSpace(mnemonic) || inst==InstitutionFlags.None)
+                {
+                    result.Add(new TierRow { Mnemonic=mnemonic, Institutions=inst, Status="Failed: invalid required fields" });
+                    continue;
+                }
+
+                result.Add(new TierRow {
+                    Mnemonic = mnemonic,
+                    Institutions = inst,
+                    Categories = cats,
+                    Reporting = reps,
+                    IsEntity = isEnt,
+                    Parent = parent,
+                    Status = "Pending"
+                });
             }
-            row.Status = status;
-            if (!string.IsNullOrEmpty(indent)) row.IndentId = indent;
         }
-    }
+        return result;
+    }, ct).ConfigureAwait(false);
 }
-------------------
-using System.Windows.Forms;
 
-namespace YourApp.Controls
+private static int Find(string[] header, string name)
 {
-    partial class TiersControl
-    {
-        private System.ComponentModel.IContainer components = null;
-
-        private Panel panelTop;
-        private Button btnUpload;
-        private TextBox txtFilePath;
-        private Label lblFilePath;
-        private Button btnSave;
-        private DataGridView dataGridView1;
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing && (components != null)) components.Dispose();
-            base.Dispose(disposing);
-        }
-
-        private void InitializeComponent()
-        {
-            this.panelTop = new System.Windows.Forms.Panel();
-            this.btnSave = new System.Windows.Forms.Button();
-            this.txtFilePath = new System.Windows.Forms.TextBox();
-            this.lblFilePath = new System.Windows.Forms.Label();
-            this.btnUpload = new System.Windows.Forms.Button();
-            this.dataGridView1 = new System.Windows.Forms.DataGridView();
-            this.panelTop.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
-            this.SuspendLayout();
-            // panelTop
-            this.panelTop.Controls.Add(this.btnSave);
-            this.panelTop.Controls.Add(this.txtFilePath);
-            this.panelTop.Controls.Add(this.lblFilePath);
-            this.panelTop.Controls.Add(this.btnUpload);
-            this.panelTop.Dock = System.Windows.Forms.DockStyle.Top;
-            this.panelTop.Location = new System.Drawing.Point(0, 0);
-            this.panelTop.Name = "panelTop";
-            this.panelTop.Padding = new System.Windows.Forms.Padding(8);
-            this.panelTop.Size = new System.Drawing.Size(960, 48);
-            this.panelTop.TabIndex = 0;
-            // btnSave
-            this.btnSave.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnSave.Location = new System.Drawing.Point(864, 11);
-            this.btnSave.Name = "btnSave";
-            this.btnSave.Size = new System.Drawing.Size(88, 26);
-            this.btnSave.TabIndex = 3;
-            this.btnSave.Text = "Save Data";
-            this.btnSave.UseVisualStyleBackColor = true;
-            // txtFilePath
-            this.txtFilePath.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
-                        | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtFilePath.Location = new System.Drawing.Point(272, 13);
-            this.txtFilePath.Name = "txtFilePath";
-            this.txtFilePath.ReadOnly = true;
-            this.txtFilePath.Size = new System.Drawing.Size(578, 22);
-            this.txtFilePath.TabIndex = 2;
-            // lblFilePath
-            this.lblFilePath.AutoSize = true;
-            this.lblFilePath.Location = new System.Drawing.Point(213, 17);
-            this.lblFilePath.Name = "lblFilePath";
-            this.lblFilePath.Size = new System.Drawing.Size(57, 13);
-            this.lblFilePath.TabIndex = 1;
-            this.lblFilePath.Text = "File path:";
-            // btnUpload
-            this.btnUpload.Location = new System.Drawing.Point(8, 11);
-            this.btnUpload.Name = "btnUpload";
-            this.btnUpload.Size = new System.Drawing.Size(192, 26);
-            this.btnUpload.TabIndex = 0;
-            this.btnUpload.Text = "Upload CSV…";
-            this.btnUpload.UseVisualStyleBackColor = true;
-            // dataGridView1
-            this.dataGridView1.AutoGenerateColumns = false;
-            this.dataGridView1.BackgroundColor = System.Drawing.SystemColors.Window;
-            this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            this.dataGridView1.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.dataGridView1.Location = new System.Drawing.Point(0, 48);
-            this.dataGridView1.Name = "dataGridView1";
-            this.dataGridView1.RowHeadersVisible = false;
-            this.dataGridView1.Size = new System.Drawing.Size(960, 552);
-            this.dataGridView1.TabIndex = 1;
-            // TiersControl
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
-            this.Controls.Add(this.dataGridView1);
-            this.Controls.Add(this.panelTop);
-            this.Name = "TiersControl";
-            this.Size = new System.Drawing.Size(960, 600);
-            this.panelTop.ResumeLayout(false);
-            this.panelTop.PerformLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
-            this.ResumeLayout(false);
-        }
-    }
+    for (int i=0;i<header.Length;i++)
+        if (string.Equals(header[i], name, StringComparison.OrdinalIgnoreCase)) return i;
+    return -1;
 }
-------------Commun-----
+
+----------------------------------------
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace YourApp.Domain
+namespace Tethys
 {
-    /// <summary>
-    /// Factory responsible for creating tiers in your backend/system.
-    /// Replace the implementation with real calls.
-    /// </summary>
-    public static class TierFactories
+    public static class SophisPartyFactory
     {
-        // Prefer async in UI flows; adapt to your real API
-        public static Task<string> CreateAsync(TierCreateRequest request, CancellationToken ct)
+        // your real codes:
+        private static readonly Dictionary<ParentOption,int> ParentCodes = new Dictionary<ParentOption,int>
         {
-            // Validate minimal required fields defensively
-            if (request == null) throw new ArgumentNullException("request");
-            if (string.IsNullOrWhiteSpace(request.Mnemonic)) throw new ArgumentException("Mnemonic is required.");
-            // InstitutionType is a value type, already required on the DTO.
+            { ParentOption.INT,  10007538 },
+            { ParentOption.EXT,  10007539 },
+            { ParentOption.AFB,  10007540 },
+            { ParentOption.ISDA, 10007545 },
+        };
 
-            // TODO: Call your domain/service/repository here.
-            // This stub simulates work and returns an ID.
+        public static Task<string> CreateAsync(TierCreateRequest req, CancellationToken ct)
+        {
+            if (req == null) throw new ArgumentNullException("req");
+            if (string.IsNullOrWhiteSpace(req.Mnemonic)) throw new ArgumentException("Mnemonic is required.");
+            if (req.Institutions == InstitutionFlags.None) throw new ArgumentException("At least one Institution Type is required.");
+
             return Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
-                // Simulate I/O or work
-                Thread.Sleep(120);
-                return "IND-" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpperInvariant();
+
+                var dialog = new CSNThirdPartyDlg();
+                dialog.SetReference(req.Mnemonic);
+
+                // Institutions: set all present flags
+                var inst=req.Institutions;
+                if ((inst & InstitutionFlags.Counterparty)   !=0) dialog.SetCounterparty(true);
+                if ((inst & InstitutionFlags.Broker)         !=0) dialog.SetBroker(true);
+                if ((inst & InstitutionFlags.ClearingHouse)  !=0) dialog.SetclearingHouse(true);
+                if ((inst & InstitutionFlags.Group)          !=0) dialog.SetGroup(true);
+                if ((inst & InstitutionFlags.ExecutionVenue) !=0) dialog.SetExecutionVenue(true);
+                if ((inst & InstitutionFlags.Depositary)     !=0) dialog.SetDepository(true);
+                if ((inst & InstitutionFlags.Customer)       !=0) dialog.SetCustomer(true);
+                if ((inst & InstitutionFlags.PSET)           !=0) dialog.SetPSET(true);
+                if ((inst & InstitutionFlags.ClearingMember) !=0) dialog.SetClearingMember(true);
+                if ((inst & InstitutionFlags.TradeRepository)!=0) dialog.SetTradeRepositary(true);
+
+                // Categories: set all present flags
+                var cat=req.Categories;
+                if ((cat & CategoryFlags.Corporate)   !=0) dialog.SetCorporate(true);
+                if ((cat & CategoryFlags.Exchange)    !=0) dialog.SetExchange(true);
+                if ((cat & CategoryFlags.Institution) !=0) dialog.SetInstitution(true);
+                if ((cat & CategoryFlags.Bank)        !=0) dialog.SetBank(true);
+                if ((cat & CategoryFlags.Other)       !=0) dialog.Setother(true);
+
+                // Reporting flags
+                var rep=req.Reporting;
+                if ((rep & ReportingOptions.GrossPrice)   !=0) dialog.SetGrossPrice(true);
+                if ((rep & ReportingOptions.AveragePrice) !=0) dialog.SetAveragePrice(true);
+                if ((rep & ReportingOptions.MarketTax)    !=0) dialog.SetMarketTax(true);
+
+                // Is entity
+                if (req.IsEntity.HasValue) dialog.SetEntity(req.IsEntity.Value);
+
+                // Parent -> integer code
+                if (req.Parent != ParentOption.None)
+                {
+                    int code;
+                    if (ParentCodes.TryGetValue(req.Parent, out code)) dialog.SetParent(code);
+                }
+
+                return dialog.Save();
             }, ct);
         }
     }
 }
+----------------------------
+var req = new TierCreateRequest
+{
+    Mnemonic     = row.Mnemonic,
+    Institutions = row.Institutions,
+    Categories   = row.Categories,
+    Reporting    = row.Reporting,
+    IsEntity     = row.IsEntity,
+    Parent       = row.Parent
+};
+var indent = await SophisPartyFactory.CreateAsync(req, token);
 
-
----------------CSV sample to test------------------------
-Mnemonic,InstitutionType,Category,Reporting,IsEntity,Parent
-ACC_PAY,Vendor,,GrossPrice|AveragePrice,true,Internal
-ACC_REC,Customer,Institution,MarketTax,false,ALL
-HR_MAIN,Internal,Corporate,AveragePrice,,ESDA
-FIN_TAX,Group,Other,,no,EXT
-SUP_EU,Broker,Exchange,GrossPrice|MarketTax,yes,
+-----------------------------
+Mnemonic,InstitutionTypes,Categories,Reporting,IsEntity,Parent
+ACC_PAY,Counterparty|Depositary,,GrossPrice|AveragePrice,true,INT
+ACC_REC,Customer,Institution|Bank,MarketTax,false,EXT
+HR_MAIN,Group|ExecutionVenue,Corporate,AveragePrice,,ISDA
+FIN_TAX,Group,Other,,no,
+SUP_EU,Broker,Exchange,GrossPrice|MarketTax,yes,AFB
