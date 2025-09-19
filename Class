@@ -1,61 +1,128 @@
-// Put this helper in your control file (top-level, private)
-private sealed class Item<T>
+int iMnemonic = Find(header, "Mnemonic");
+int iName     = Find(header, "Name");   // NEW required column
+int iInst     = Find(header, "InstitutionTypes");
+int iCat      = Find(header, "Categories");
+int iRep      = Find(header, "Reporting");
+int iEnt      = Find(header, "IsEntity");
+int iPar      = Find(header, "Parent");
+
+if (iMnemonic < 0 || iName < 0 || iInst < 0)
+    throw new InvalidDataException("Required columns missing: Mnemonic, Name, InstitutionTypes.");
+
+.....
+
+
+string mnemonic = At(iMnemonic);
+string name     = At(iName);
+
+var inst   = ParseHelpers.ParseInstitutionFlags(At(iInst));
+var cats   = ParseHelpers.ParseCategoryFlags(At(iCat));
+var reps   = ParseHelpers.ParseReporting(At(iRep));
+var isEnt  = ParseHelpers.ParseNullableBool(At(iEnt));
+var parent = ParseHelpers.ParseParent(At(iPar));
+
+if (string.IsNullOrWhiteSpace(mnemonic) ||
+    string.IsNullOrWhiteSpace(name) ||
+    inst == InstitutionFlags.None)
 {
-    public string Text { get; set; }
-    public T Value { get; set; }
-    public override string ToString() => Text;
+    result.Add(new TierRow {
+        Mnemonic = mnemonic,
+        Name     = name,
+        Institutions = inst,
+        Categories   = cats,
+        Reporting    = reps,
+        IsEntity     = isEnt,
+        Parent       = parent,
+        Status       = "Failed: invalid required fields"
+    });
+    continue;
 }
 
-// --- IsEntity (bool?) ---
-var isEntityItems = new List<Item<bool?>>
-{
-    new Item<bool?>{ Text = "",      Value = null  },
-    new Item<bool?>{ Text = "True",  Value = true  },
-    new Item<bool?>{ Text = "False", Value = false },
-};
+result.Add(new TierRow {
+    Mnemonic = mnemonic,
+    Name     = name,
+    Institutions = inst,
+    Categories   = cats,
+    Reporting    = reps,
+    IsEntity     = isEnt,
+    Parent       = parent,
+    Status       = "Pending"
+});
 
-var colIsEntity = new DataGridViewComboBoxColumn
-{
-    Name = "colIsEntity",
-    HeaderText = "Is Entity",
-    DataPropertyName = "IsEntity",                  // TierRow.IsEntity (bool?)
-    DataSource = isEntityItems,                     // <-- typed datasource
-    DisplayMember = "Text",
-    ValueMember = "Value",
-    ValueType = typeof(bool),                       // value type of the property
-    DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-    FlatStyle = FlatStyle.Standard,
-    Width = 90
-};
-dataGridView1.Columns.Add(colIsEntity);
+....
 
-// --- Parent (ParentOption enum) ---
-var parentItems = new List<Item<ParentOption>>
-{
-    new Item<ParentOption>{ Text = "",     Value = ParentOption.None },
-    new Item<ParentOption>{ Text = "INT",  Value = ParentOption.INT  },
-    new Item<ParentOption>{ Text = "ISDA", Value = ParentOption.ISDA },
-    new Item<ParentOption>{ Text = "AFB",  Value = ParentOption.AFB  },
-    new Item<ParentOption>{ Text = "EXT",  Value = ParentOption.EXT  },
-};
+dataGridView1.AutoGenerateColumns = false;
+dataGridView1.Columns.Clear();
 
-var colParent = new DataGridViewComboBoxColumn
-{
-    Name = "colParent",
+// Mnemonic
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "Mnemonic",
+    DataPropertyName = "Mnemonic",
+    ReadOnly = true
+});
+
+// Name
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "Name",
+    DataPropertyName = "Name",
+    ReadOnly = true
+});
+
+// Institution Types (combo / multivalue handled as string pipe-delimited)
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "InstitutionTypes",
+    DataPropertyName = "Institutions"
+});
+
+// Categories
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "Categories",
+    DataPropertyName = "Categories"
+});
+
+// Reporting
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "Reporting",
+    DataPropertyName = "Reporting"
+});
+
+// IsEntity
+dataGridView1.Columns.Add(new DataGridViewCheckBoxColumn {
+    HeaderText = "IsEntity",
+    DataPropertyName = "IsEntity"
+});
+
+// Parent
+var parentCol = new DataGridViewComboBoxColumn {
     HeaderText = "Parent",
-    DataPropertyName = "Parent",                     // TierRow.Parent (ParentOption)
-    DataSource = parentItems,                        // <-- typed datasource
-    DisplayMember = "Text",
-    ValueMember = "Value",
-    ValueType = typeof(ParentOption),
-    DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
-    FlatStyle = FlatStyle.Standard,
-    Width = 120
+    DataPropertyName = "Parent",
+    DataSource = Enum.GetValues(typeof(ParentOption))
 };
-dataGridView1.Columns.Add(colParent);
+dataGridView1.Columns.Add(parentCol);
 
--------------------
+// Status
+dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
+    HeaderText = "Status",
+    DataPropertyName = "Status",
+    ReadOnly = true
+});
 
 
-row.IsEntity = ParseHelpers.ParseNullableBool(entTxt); // bool?
-row.Parent   = ParseHelpers.ParseParent(parTxt);       // ParentOption (INT/ISDA/AFB/EXT)
+....
+
+public class TierRow
+{
+    public string Mnemonic { get; set; }          // required
+    public string Name { get; set; }              // required
+    public InstitutionFlags Institutions { get; set; }
+    public CategoryFlags Categories { get; set; }
+    public ReportingOptions Reporting { get; set; }
+    public bool? IsEntity { get; set; }
+    public ParentOption Parent { get; set; }
+
+    // runtime status
+    public string Status { get; set; }
+    public string IndentId { get; set; }
+    public string Error { get; set; }
+}
+
