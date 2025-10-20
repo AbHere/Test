@@ -1,128 +1,147 @@
-int iMnemonic = Find(header, "Mnemonic");
-int iName     = Find(header, "Name");   // NEW required column
-int iInst     = Find(header, "InstitutionTypes");
-int iCat      = Find(header, "Categories");
-int iRep      = Find(header, "Reporting");
-int iEnt      = Find(header, "IsEntity");
-int iPar      = Find(header, "Parent");
+/* CTE: identify the row where start_validity dropped below 2099-12-31 */
+WITH change_row AS (
+  SELECT
+      ats.code,
+      ats.sequence,
+      ats.numero,
+      ats.start_validity,
+      ats.end_validity,
+      LAG(ats.start_validity) OVER (
+        PARTITION BY ats.code
+        ORDER BY ats.numero
+      ) AS prev_start
+  FROM AUDIT_TIERSSETTLEMENT ats
+  /* keep predicates sargable; add your filters (code, the two sequences, etc.) */
+  WHERE ats.code = :p_code
+    AND ats.sequence IN (:AuditTierSequence, :PreviousAuditTierSequence)
+),
+picked_change AS (
+  SELECT *
+  FROM change_row
+  WHERE prev_start = DATE '2099-12-31'
+    AND start_validity < DATE '2099-12-31'
+)
+SELECT
+    /* your existing columns … */
+    base_cols.*,
 
-if (iMnemonic < 0 || iName < 0 || iInst < 0)
-    throw new InvalidDataException("Required columns missing: Mnemonic, Name, InstitutionTypes.");
+    /* changer info */
+    ru.name          AS changer_name,
+    atc.modif_date   AS changed_at
+FROM (
+    /* your original FROM/JOINs that compute the diff
+       and already produce the two sequences; alias as base_cols */
+    SELECT /* … existing long select … */ 
+    FROM   /* … existing joins … */
+    WHERE  /* … existing predicates … */
+) base_cols
 
-.....
+/* join the detected change row on the sequence you consider "after" */
+JOIN picked_change pc
+  ON pc.sequence = base_cols.sequence_after   -- use the right side from your diff
 
+/* for that sequence, pick the most recent change from AUDIT_TIERS_COMPO */
+CROSS APPLY (
+  SELECT a.id, a.modif_date
+  FROM   AUDIT_TIERS_COMPO a
+  WHERE  a.sequence = pc.sequence
+  ORDER  BY a.modif_date DESC
+  FETCH FIRST 1 ROW ONLY
+) atc
 
-string mnemonic = At(iMnemonic);
-string name     = At(iName);
-
-var inst   = ParseHelpers.ParseInstitutionFlags(At(iInst));
-var cats   = ParseHelpers.ParseCategoryFlags(At(iCat));
-var reps   = ParseHelpers.ParseReporting(At(iRep));
-var isEnt  = ParseHelpers.ParseNullableBool(At(iEnt));
-var parent = ParseHelpers.ParseParent(At(iPar));
-
-if (string.IsNullOrWhiteSpace(mnemonic) ||
-    string.IsNullOrWhiteSpace(name) ||
-    inst == InstitutionFlags.None)
-{
-    result.Add(new TierRow {
-        Mnemonic = mnemonic,
-        Name     = name,
-        Institutions = inst,
-        Categories   = cats,
-        Reporting    = reps,
-        IsEntity     = isEnt,
-        Parent       = parent,
-        Status       = "Failed: invalid required fields"
-    });
-    continue;
-}
-
-result.Add(new TierRow {
-    Mnemonic = mnemonic,
-    Name     = name,
-    Institutions = inst,
-    Categories   = cats,
-    Reporting    = reps,
-    IsEntity     = isEnt,
-    Parent       = parent,
-    Status       = "Pending"
-});
-
-....
-
-dataGridView1.AutoGenerateColumns = false;
-dataGridView1.Columns.Clear();
-
-// Mnemonic
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "Mnemonic",
-    DataPropertyName = "Mnemonic",
-    ReadOnly = true
-});
-
-// Name
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "Name",
-    DataPropertyName = "Name",
-    ReadOnly = true
-});
-
-// Institution Types (combo / multivalue handled as string pipe-delimited)
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "InstitutionTypes",
-    DataPropertyName = "Institutions"
-});
-
-// Categories
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "Categories",
-    DataPropertyName = "Categories"
-});
-
-// Reporting
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "Reporting",
-    DataPropertyName = "Reporting"
-});
-
-// IsEntity
-dataGridView1.Columns.Add(new DataGridViewCheckBoxColumn {
-    HeaderText = "IsEntity",
-    DataPropertyName = "IsEntity"
-});
-
-// Parent
-var parentCol = new DataGridViewComboBoxColumn {
-    HeaderText = "Parent",
-    DataPropertyName = "Parent",
-    DataSource = Enum.GetValues(typeof(ParentOption))
-};
-dataGridView1.Columns.Add(parentCol);
-
-// Status
-dataGridView1.Columns.Add(new DataGridViewTextBoxColumn {
-    HeaderText = "Status",
-    DataPropertyName = "Status",
-    ReadOnly = true
-});
+JOIN RISKUSERS ru
+  ON ru.ident = atc.id;
 
 
-....
 
-public class TierRow
-{
-    public string Mnemonic { get; set; }          // required
-    public string Name { get; set; }              // required
-    public InstitutionFlags Institutions { get; set; }
-    public CategoryFlags Categories { get; set; }
-    public ReportingOptions Reporting { get; set; }
-    public bool? IsEntity { get; set; }
-    public ParentOption Parent { get; set; }
+_______
 
-    // runtime status
-    public string Status { get; set; }
-    public string IndentId { get; set; }
-    public string Error { get; set; }
-}
+
+
+/* CTE: identify the row where start_validity dropped below 2099-12-31 */
+WITH change_row AS (
+  SELECT
+      ats.code,
+      ats.sequence,
+      ats.numero,
+      ats.start_validity,
+      ats.end_validity,
+      LAG(ats.start_validity) OVER (
+        PARTITION BY ats.code
+        ORDER BY ats.numero
+      ) AS prev_start
+  FROM AUDIT_TIERSSETTLEMENT ats
+  /* keep predicates sargable; add your filters (code, the two sequences, etc.) */
+  WHERE ats.code = :p_code
+    AND ats.sequence IN (:AuditTierSequence, :PreviousAuditTierSequence)
+),
+picked_change AS (
+  SELECT *
+  FROM change_row
+  WHERE prev_start = DATE '2099-12-31'
+    AND start_validity < DATE '2099-12-31'
+)
+SELECT
+    /* your existing columns … */
+    base_cols.*,
+
+    /* changer info */
+    ru.name          AS changer_name,
+    atc.modif_date   AS changed_at
+FROM (
+    /* your original FROM/JOINs that compute the diff
+       and already produce the two sequences; alias as base_cols */
+    SELECT /* … existing long select … */ 
+    FROM   /* … existing joins … */
+    WHERE  /* … existing predicates … */
+) base_cols
+
+/* join the detected change row on the sequence you consider "after" */
+JOIN picked_change pc
+  ON pc.sequence = base_cols.sequence_after   -- use the right side from your diff
+
+/* for that sequence, pick the most recent change from AUDIT_TIERS_COMPO */
+CROSS APPLY (
+  SELECT a.id, a.modif_date
+  FROM   AUDIT_TIERS_COMPO a
+  WHERE  a.sequence = pc.sequence
+  ORDER  BY a.modif_date DESC
+  FETCH FIRST 1 ROW ONLY
+) atc
+
+JOIN RISKUSERS ru
+  ON ru.ident = atc.id;
+
+____ minimal
+
+
+WITH ordered AS (
+  SELECT
+    ats.*,
+    LAG(ats.start_validity) OVER (PARTITION BY ats.code ORDER BY ats.numero) AS prev_start
+  FROM AUDIT_TIERSSETTLEMENT ats
+  WHERE ats.code = :p_code
+),
+the_change AS (
+  SELECT code, sequence, numero, start_validity
+  FROM   ordered
+  WHERE  prev_start     = DATE '2099-12-31'
+     AND start_validity < DATE '2099-12-31'
+)
+SELECT
+  c.code,
+  c.sequence,
+  c.start_validity,
+  ru.name        AS changer_name,
+  a.modif_date   AS changed_at
+FROM the_change c
+CROSS APPLY (
+  SELECT id, modif_date
+  FROM   AUDIT_TIERS_COMPO
+  WHERE  sequence = c.sequence
+  ORDER  BY modif_date DESC
+  FETCH FIRST 1 ROW ONLY
+) a
+JOIN RISKUSERS ru
+  ON ru.ident = a.id;
 
