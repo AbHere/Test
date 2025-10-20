@@ -1,129 +1,24 @@
-/* CTE: identify the row where start_validity dropped below 2099-12-31 */
-WITH change_row AS (
-  SELECT
-      ats.code,
-      ats.sequence,
-      ats.numero,
-      ats.start_validity,
-      ats.end_validity,
-      LAG(ats.start_validity) OVER (
-        PARTITION BY ats.code
-        ORDER BY ats.numero
-      ) AS prev_start
-  FROM AUDIT_TIERSSETTLEMENT ats
-  /* keep predicates sargable; add your filters (code, the two sequences, etc.) */
-  WHERE ats.code = :p_code
-    AND ats.sequence IN (:AuditTierSequence, :PreviousAuditTierSequence)
-),
-picked_change AS (
-  SELECT *
-  FROM change_row
-  WHERE prev_start = DATE '2099-12-31'
-    AND start_validity < DATE '2099-12-31'
-)
-SELECT
-    /* your existing columns … */
-    base_cols.*,
-
-    /* changer info */
-    ru.name          AS changer_name,
-    atc.modif_date   AS changed_at
-FROM (
-    /* your original FROM/JOINs that compute the diff
-       and already produce the two sequences; alias as base_cols */
-    SELECT /* … existing long select … */ 
-    FROM   /* … existing joins … */
-    WHERE  /* … existing predicates … */
-) base_cols
-
-/* join the detected change row on the sequence you consider "after" */
-JOIN picked_change pc
-  ON pc.sequence = base_cols.sequence_after   -- use the right side from your diff
-
-/* for that sequence, pick the most recent change from AUDIT_TIERS_COMPO */
-CROSS APPLY (
-  SELECT a.id, a.modif_date
-  FROM   AUDIT_TIERS_COMPO a
-  WHERE  a.sequence = pc.sequence
-  ORDER  BY a.modif_date DESC
-  FETCH FIRST 1 ROW ONLY
-) atc
-
-JOIN RISKUSERS ru
-  ON ru.ident = atc.id;
-
-
-
-_______
-
-
-
-/* CTE: identify the row where start_validity dropped below 2099-12-31 */
-WITH change_row AS (
-  SELECT
-      ats.code,
-      ats.sequence,
-      ats.numero,
-      ats.start_validity,
-      ats.end_validity,
-      LAG(ats.start_validity) OVER (
-        PARTITION BY ats.code
-        ORDER BY ats.numero
-      ) AS prev_start
-  FROM AUDIT_TIERSSETTLEMENT ats
-  /* keep predicates sargable; add your filters (code, the two sequences, etc.) */
-  WHERE ats.code = :p_code
-    AND ats.sequence IN (:AuditTierSequence, :PreviousAuditTierSequence)
-),
-picked_change AS (
-  SELECT *
-  FROM change_row
-  WHERE prev_start = DATE '2099-12-31'
-    AND start_validity < DATE '2099-12-31'
-)
-SELECT
-    /* your existing columns … */
-    base_cols.*,
-
-    /* changer info */
-    ru.name          AS changer_name,
-    atc.modif_date   AS changed_at
-FROM (
-    /* your original FROM/JOINs that compute the diff
-       and already produce the two sequences; alias as base_cols */
-    SELECT /* … existing long select … */ 
-    FROM   /* … existing joins … */
-    WHERE  /* … existing predicates … */
-) base_cols
-
-/* join the detected change row on the sequence you consider "after" */
-JOIN picked_change pc
-  ON pc.sequence = base_cols.sequence_after   -- use the right side from your diff
-
-/* for that sequence, pick the most recent change from AUDIT_TIERS_COMPO */
-CROSS APPLY (
-  SELECT a.id, a.modif_date
-  FROM   AUDIT_TIERS_COMPO a
-  WHERE  a.sequence = pc.sequence
-  ORDER  BY a.modif_date DESC
-  FETCH FIRST 1 ROW ONLY
-) atc
-
-JOIN RISKUSERS ru
-  ON ru.ident = atc.id;
-
-____ minimal
-
+-- :p_code is the third party ID you tested (e.g. 2137904)
 
 WITH ordered AS (
   SELECT
-    ats.*,
-    LAG(ats.start_validity) OVER (PARTITION BY ats.code ORDER BY ats.numero) AS prev_start
-  FROM AUDIT_TIERSSETTLEMENT ats
+    ats.code,
+    ats.sequence,
+    ats.numero,
+    TRUNC(ats.start_validity) AS start_validity,
+    LAG(TRUNC(ats.start_validity)) OVER (
+      PARTITION BY ats.code
+      ORDER BY ats.numero
+    ) AS prev_start,
+    LEAD(TRUNC(ats.start_validity)) OVER (
+      PARTITION BY ats.code
+      ORDER BY ats.numero
+    ) AS next_start
+  FROM audit_tierssettlement ats
   WHERE ats.code = :p_code
 ),
 the_change AS (
-  SELECT code, sequence, numero, start_validity
+  SELECT *
   FROM   ordered
   WHERE  prev_start     = DATE '2099-12-31'
      AND start_validity < DATE '2099-12-31'
@@ -131,17 +26,97 @@ the_change AS (
 SELECT
   c.code,
   c.sequence,
+  c.numero,
   c.start_validity,
   ru.name        AS changer_name,
-  a.modif_date   AS changed_at
+  a.datemodif    AS changed_at
 FROM the_change c
-CROSS APPLY (
-  SELECT id, modif_date
-  FROM   AUDIT_TIERS_COMPO
-  WHERE  sequence = c.sequence
-  ORDER  BY modif_date DESC
+
+-- keep the change row even if ATC has no match
+OUTER APPLY (
+  SELECT id, datemodif
+  FROM   audit_tiers_compo x
+  WHERE  x.sequence = c.sequence
+    AND  x.code     = c.code              -- safer: match code + sequence
+  ORDER  BY x.datemodif DESC
   FETCH FIRST 1 ROW ONLY
 ) a
-JOIN RISKUSERS ru
+
+LEFT JOIN riskusers ru
   ON ru.ident = a.id;
+
+--------
+
+WITH ordered AS (
+  SELECT
+    ats.code,
+    ats.sequence,
+    ats.numero,
+    TRUNC(ats.start_validity) AS start_validity,
+    LAG(TRUNC(ats.start_validity))  OVER (PARTITION BY ats.code ORDER BY ats.numero) AS prev_start,
+    LEAD(TRUNC(ats.start_validity)) OVER (PARTITION BY ats.code ORDER BY ats.numero) AS next_start
+  FROM audit_tierssettlement ats
+  WHERE ats.code = :p_code
+),
+the_change AS (
+  SELECT *
+  FROM   ordered
+  WHERE  prev_start     = DATE '2099-12-31'
+     AND start_validity < DATE '2099-12-31'
+)
+SELECT
+  c.code,
+  c.sequence,
+  c.numero,
+  c.start_validity,
+  ru.name      AS changer_name,
+  a.datemodif  AS changed_at
+FROM the_change c
+OUTER APPLY (
+  SELECT id, datemodif
+  FROM   audit_tiers_compo x
+  WHERE  x.code     = c.code
+    AND  x.sequence = c.sequence
+    AND  (c.next_start IS NULL OR x.datemodif < c.next_start)
+  ORDER  BY datemodif DESC
+  FETCH FIRST 1 ROW ONLY
+) a
+LEFT JOIN riskusers ru
+  ON ru.ident = a.id;
+
+-------
+
+WITH the_change AS ( /* as in A) or B) but without :p_code filter */ )
+SELECT base_cols.*,
+       ru.name       AS changer_name,
+       a.datemodif   AS changed_at
+FROM ( /* your current big diff select */ ) base_cols
+JOIN the_change c
+  ON c.code     = base_cols.code
+ AND c.sequence = base_cols.sequence_after   -- the newer state
+OUTER APPLY (
+  SELECT id, datemodif
+  FROM   audit_tiers_compo x
+  WHERE  x.code = c.code AND x.sequence = c.sequence
+  ORDER  BY datemodif DESC
+  FETCH FIRST 1 ROW ONLY
+) a
+LEFT JOIN riskusers ru
+  ON ru.ident = a.id;
+
+
+------
+
+-- 1) Do we have ATC rows for that code/sequence?
+SELECT COUNT(*) cnt
+FROM audit_tiers_compo
+WHERE code = :p_code
+  AND sequence IN (SELECT sequence FROM audit_tierssettlement WHERE code = :p_code);
+
+-- 2) What are the ATC rows around the change?
+SELECT sequence, id, datemodif
+FROM   audit_tiers_compo
+WHERE  code = :p_code
+ORDER  BY sequence, datemodif;
+
 
