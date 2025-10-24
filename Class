@@ -1,150 +1,98 @@
-CREATE OR REPLACE FUNCTION IsFixingClausesConsistent(sicovamValue IN NUMBER)
-RETURN VARCHAR2 IS
-  -- Accumulateurs globaux (union des problèmes vus sur l'instrument + paniers)
-  g_has_date_ko        BOOLEAN := FALSE;
-  g_has_sj_list_ko     BOOLEAN := FALSE;
-  g_has_underlying_ko  BOOLEAN := FALSE;
+-- ⇩ Change this to your sicovam
+VAR code NUMBER
+EXEC :code := 123456;
 
-  -- Curseur paniers comme la version d'origine
-  CURSOR c_baskets IS
-    SELECT p.sicopanier
-    FROM panier p
-    WHERE p.sicovam = sicovamValue
-      AND p.quantite = 1;
+-- A) EXPECTED components (PANIER-only model)
+WITH expected AS (
+  SELECT DISTINCT p.sicopanier sj
+  FROM panier p
+  WHERE p.sicovam = :code
+),
+fixings AS (
+  SELECT DISTINCT f.cdc_ifc_code_sj sj
+  FROM cdc_ifc_clotures f
+  WHERE f.code = :code
+    AND f.cdc_ifc_code_sj IS NOT NULL
+)
+SELECT
+  (SELECT COUNT(*) FROM expected) AS n_expected_panier,
+  (SELECT COUNT(*) FROM fixings)  AS n_fixings_sj
+FROM dual;
 
-  ---------------------------------------------------------------------------
-  -- Concatène les flags finaux en une chaîne lisible
-  ---------------------------------------------------------------------------
-  FUNCTION build_result RETURN VARCHAR2 IS
-    v_res VARCHAR2(200) := '';
-  BEGIN
-    IF g_has_date_ko       THEN v_res := v_res || 'date.ko,';       END IF;
-    IF g_has_sj_list_ko    THEN v_res := v_res || 'sous_jacent.ko,'; END IF;
-    IF g_has_underlying_ko THEN v_res := v_res || 'underlying.ko,';  END IF;
+-- B) EXPECTED components (TITRES→PANIER model = like your original function)
+WITH expected AS (
+  SELECT DISTINCT p.sicopanier sj
+  FROM titres t
+  JOIN panier p ON p.sicovam = t.codesj
+  WHERE t.sicovam = :code
+),
+fixings AS (
+  SELECT DISTINCT f.cdc_ifc_code_sj sj
+  FROM cdc_ifc_clotures f
+  WHERE f.code = :code
+    AND f.cdc_ifc_code_sj IS NOT NULL
+)
+SELECT
+  (SELECT COUNT(*) FROM expected) AS n_expected_titres_panier,
+  (SELECT COUNT(*) FROM fixings)  AS n_fixings_sj
+FROM dual;
 
-    IF v_res IS NULL OR v_res = '' THEN
-      RETURN 'OK';
-    ELSE
-      RETURN RTRIM(v_res, ',');
-    END IF;
-  END;
+-- C) Missing EXPECTED underlyings (expected – fixings)
+WITH expected AS (
+  -- pick ONE of the two expected definitions above that matches your model
+  SELECT DISTINCT p.sicopanier sj
+  FROM titres t
+  JOIN panier p ON p.sicovam = t.codesj
+  WHERE t.sicovam = :code
+),
+fixings AS (
+  SELECT DISTINCT f.cdc_ifc_code_sj sj
+  FROM cdc_ifc_clotures f
+  WHERE f.code = :code
+)
+SELECT e.sj AS missing_expected_sj
+FROM expected e
+WHERE NOT EXISTS (
+  SELECT 1 FROM fixings f WHERE f.sj = e.sj
+)
+ORDER BY 1;
 
-  ---------------------------------------------------------------------------
-  -- Vérifie un code (l’instrument ou un panier) en mode set-based (sans boucles)
-  -- et remonte les drapeaux dans les accumulateurs globaux.
-  ---------------------------------------------------------------------------
-  PROCEDURE check_code(p_code IN NUMBER) IS
-    v_date_ko        PLS_INTEGER := 0;
-    v_sj_list_ko     PLS_INTEGER := 0;
-    v_underlying_ko  PLS_INTEGER := 0;
-  BEGIN
-    /*
-      Hypothèses / mapping tables :
-      - cdc_ifc_clause_hybpan = "closes" (dates de clôture) -> CDC_IFC_DATEFIN
-      - cdc_ifc_clotures     = "fixings" (date de fixing + code_sj)
-      - panier(sicovam -> composantes attendues = sicopanier)
-    */
+-- D) Extras in fixings (fixings – expected)
+WITH expected AS (
+  SELECT DISTINCT p.sicopanier sj
+  FROM titres t
+  JOIN panier p ON p.sicovam = t.codesj
+  WHERE t.sicovam = :code
+),
+fixings AS (
+  SELECT DISTINCT f.cdc_ifc_code_sj sj
+  FROM cdc_ifc_clotures f
+  WHERE f.code = :code
+)
+SELECT f.sj AS extra_in_fixings_not_in_panier
+FROM fixings f
+WHERE NOT EXISTS (
+  SELECT 1 FROM expected e WHERE e.sj = f.sj
+)
+ORDER BY 1;
 
-    WITH
-    expected_sj AS (
-      SELECT DISTINCT p.sicopanier AS sj
-      FROM panier p
-      WHERE p.sicovam = p_code
-    ),
-    close_dates AS (
-      SELECT DISTINCT c.cdc_ifc_datefin AS d
-      FROM cdc_ifc_clause_hybpan c
-      WHERE c.code = p_code
-        AND c.cdc_ifc_datefin IS NOT NULL
-    ),
-    fixing_dates AS (
-      SELECT DISTINCT f.cdc_ifc_date AS d
-      FROM cdc_ifc_clotures f
-      WHERE f.code = p_code
-    ),
-    -- (1) Dates : close ⊆ fixing (toutes dates fin doivent exister en fixing)
-    date_issue AS (
-      SELECT 1 AS has_issue
-      FROM dual
-      WHERE EXISTS (
-        SELECT 1
-        FROM close_dates cd
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM fixing_dates fd
-          WHERE fd.d = cd.d
-        )
-      )
-    ),
-    -- (2) Liste globale des SJ : manques ou extras
-    sj_list_issue AS (
-      SELECT 1 AS has_issue
-      FROM dual
-      WHERE EXISTS (
-              -- manque global (un SJ attendu jamais vu)
-              SELECT 1
-              FROM expected_sj e
-              WHERE NOT EXISTS (
-                SELECT 1
-                FROM cdc_ifc_clotures f
-                WHERE f.code = p_code
-                  AND f.cdc_ifc_code_sj = e.sj
-              )
-            )
-         OR EXISTS (
-              -- extra dans fixings (un SJ non attendu par le panier)
-              SELECT 1
-              FROM cdc_ifc_clotures f
-              WHERE f.code = p_code
-                AND NOT EXISTS (
-                  SELECT 1 FROM expected_sj e WHERE e.sj = f.cdc_ifc_code_sj
-                )
-            )
-    ),
-    -- (3) Couverture par date : pour chaque date de close, #SJ présents = #SJ attendus
-    per_date_issue AS (
-      SELECT 1 AS has_issue
-      FROM dual
-      WHERE EXISTS (
-        SELECT 1
-        FROM close_dates cd
-        CROSS JOIN (SELECT COUNT(*) AS n_expected FROM expected_sj) E
-        LEFT JOIN (
-          SELECT f.cdc_ifc_date AS d, COUNT(DISTINCT f.cdc_ifc_code_sj) AS n_present
-          FROM cdc_ifc_clotures f
-          WHERE f.code = p_code
-          GROUP BY f.cdc_ifc_date
-        ) X ON X.d = cd.d
-        WHERE NVL(X.n_present, 0) < E.n_expected
-      )
-    )
-    SELECT
-      CASE WHEN EXISTS (SELECT 1 FROM date_issue)      THEN 1 ELSE 0 END,
-      CASE WHEN EXISTS (SELECT 1 FROM sj_list_issue)   THEN 1 ELSE 0 END,
-      CASE WHEN EXISTS (SELECT 1 FROM per_date_issue)  THEN 1 ELSE 0 END
-    INTO v_date_ko, v_sj_list_ko, v_underlying_ko
-    FROM dual;
-
-    IF v_date_ko        = 1 THEN g_has_date_ko       := TRUE; END IF;
-    IF v_sj_list_ko     = 1 THEN g_has_sj_list_ko    := TRUE; END IF;
-    IF v_underlying_ko  = 1 THEN g_has_underlying_ko := TRUE; END IF;
-
-  END check_code;
-
-BEGIN
-  -- 1) Vérifie l’instrument (sicovamValue)
-  check_code(sicovamValue);
-
-  -- 2) Vérifie chaque panier associé (mêmes règles)
-  FOR r IN c_baskets LOOP
-    check_code(r.sicopanier);
-  END LOOP;
-
-  -- 3) Résultat agrégé (union des problèmes vus)
-  RETURN build_result;
-
-EXCEPTION
-  WHEN OTHERS THEN
-    RETURN 'Error: ' || SQLERRM;
-END IsFixingClausesConsistent;
-/
+-- E) Per-date coverage: dates where present < expected
+WITH expected AS (
+  SELECT COUNT(*) n_expected
+  FROM (
+    SELECT DISTINCT p.sicopanier
+    FROM titres t
+    JOIN panier p ON p.sicovam = t.codesj
+    WHERE t.sicovam = :code
+  )
+),
+per_date AS (
+  SELECT f.cdc_ifc_date d, COUNT(DISTINCT f.cdc_ifc_code_sj) n_present
+  FROM cdc_ifc_clotures f
+  WHERE f.code = :code
+  GROUP BY f.cdc_ifc_date
+)
+SELECT p.d, p.n_present, e.n_expected
+FROM per_date p CROSS JOIN expected e
+WHERE NVL(p.n_present,0) < e.n_expected
+ORDER BY p.d;
