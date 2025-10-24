@@ -1,193 +1,150 @@
 CREATE OR REPLACE FUNCTION IsFixingClausesConsistent(sicovamValue IN NUMBER)
 RETURN VARCHAR2 IS
-    v_result VARCHAR2(100) := 'OK';
-    v_count_dates NUMBER := 0;
-    v_count_dates_clotures NUMBER := 0;
-    v_missing_underlying_count NUMBER := 0;
-    v_expected_code_count NUMBER := 0;
-    v_count_missing_sousjacents NUMBER := 0;
+  -- Accumulateurs globaux (union des problèmes vus sur l'instrument + paniers)
+  g_has_date_ko        BOOLEAN := FALSE;
+  g_has_sj_list_ko     BOOLEAN := FALSE;
+  g_has_underlying_ko  BOOLEAN := FALSE;
 
-    CURSOR c_baskets IS
-        SELECT p.sicopanier
-        FROM panier p
-        WHERE p.sicovam = sicovamValue
-        AND p.quantite = 1;
+  -- Curseur paniers comme la version d'origine
+  CURSOR c_baskets IS
+    SELECT p.sicopanier
+    FROM panier p
+    WHERE p.sicovam = sicovamValue
+      AND p.quantite = 1;
+
+  ---------------------------------------------------------------------------
+  -- Concatène les flags finaux en une chaîne lisible
+  ---------------------------------------------------------------------------
+  FUNCTION build_result RETURN VARCHAR2 IS
+    v_res VARCHAR2(200) := '';
+  BEGIN
+    IF g_has_date_ko       THEN v_res := v_res || 'date.ko,';       END IF;
+    IF g_has_sj_list_ko    THEN v_res := v_res || 'sous_jacent.ko,'; END IF;
+    IF g_has_underlying_ko THEN v_res := v_res || 'underlying.ko,';  END IF;
+
+    IF v_res IS NULL OR v_res = '' THEN
+      RETURN 'OK';
+    ELSE
+      RETURN RTRIM(v_res, ',');
+    END IF;
+  END;
+
+  ---------------------------------------------------------------------------
+  -- Vérifie un code (l’instrument ou un panier) en mode set-based (sans boucles)
+  -- et remonte les drapeaux dans les accumulateurs globaux.
+  ---------------------------------------------------------------------------
+  PROCEDURE check_code(p_code IN NUMBER) IS
+    v_date_ko        PLS_INTEGER := 0;
+    v_sj_list_ko     PLS_INTEGER := 0;
+    v_underlying_ko  PLS_INTEGER := 0;
+  BEGIN
+    /*
+      Hypothèses / mapping tables :
+      - cdc_ifc_clause_hybpan = "closes" (dates de clôture) -> CDC_IFC_DATEFIN
+      - cdc_ifc_clotures     = "fixings" (date de fixing + code_sj)
+      - panier(sicovam -> composantes attendues = sicopanier)
+    */
+
+    WITH
+    expected_sj AS (
+      SELECT DISTINCT p.sicopanier AS sj
+      FROM panier p
+      WHERE p.sicovam = p_code
+    ),
+    close_dates AS (
+      SELECT DISTINCT c.cdc_ifc_datefin AS d
+      FROM cdc_ifc_clause_hybpan c
+      WHERE c.code = p_code
+        AND c.cdc_ifc_datefin IS NOT NULL
+    ),
+    fixing_dates AS (
+      SELECT DISTINCT f.cdc_ifc_date AS d
+      FROM cdc_ifc_clotures f
+      WHERE f.code = p_code
+    ),
+    -- (1) Dates : close ⊆ fixing (toutes dates fin doivent exister en fixing)
+    date_issue AS (
+      SELECT 1 AS has_issue
+      FROM dual
+      WHERE EXISTS (
+        SELECT 1
+        FROM close_dates cd
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM fixing_dates fd
+          WHERE fd.d = cd.d
+        )
+      )
+    ),
+    -- (2) Liste globale des SJ : manques ou extras
+    sj_list_issue AS (
+      SELECT 1 AS has_issue
+      FROM dual
+      WHERE EXISTS (
+              -- manque global (un SJ attendu jamais vu)
+              SELECT 1
+              FROM expected_sj e
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM cdc_ifc_clotures f
+                WHERE f.code = p_code
+                  AND f.cdc_ifc_code_sj = e.sj
+              )
+            )
+         OR EXISTS (
+              -- extra dans fixings (un SJ non attendu par le panier)
+              SELECT 1
+              FROM cdc_ifc_clotures f
+              WHERE f.code = p_code
+                AND NOT EXISTS (
+                  SELECT 1 FROM expected_sj e WHERE e.sj = f.cdc_ifc_code_sj
+                )
+            )
+    ),
+    -- (3) Couverture par date : pour chaque date de close, #SJ présents = #SJ attendus
+    per_date_issue AS (
+      SELECT 1 AS has_issue
+      FROM dual
+      WHERE EXISTS (
+        SELECT 1
+        FROM close_dates cd
+        CROSS JOIN (SELECT COUNT(*) AS n_expected FROM expected_sj) E
+        LEFT JOIN (
+          SELECT f.cdc_ifc_date AS d, COUNT(DISTINCT f.cdc_ifc_code_sj) AS n_present
+          FROM cdc_ifc_clotures f
+          WHERE f.code = p_code
+          GROUP BY f.cdc_ifc_date
+        ) X ON X.d = cd.d
+        WHERE NVL(X.n_present, 0) < E.n_expected
+      )
+    )
+    SELECT
+      CASE WHEN EXISTS (SELECT 1 FROM date_issue)      THEN 1 ELSE 0 END,
+      CASE WHEN EXISTS (SELECT 1 FROM sj_list_issue)   THEN 1 ELSE 0 END,
+      CASE WHEN EXISTS (SELECT 1 FROM per_date_issue)  THEN 1 ELSE 0 END
+    INTO v_date_ko, v_sj_list_ko, v_underlying_ko
+    FROM dual;
+
+    IF v_date_ko        = 1 THEN g_has_date_ko       := TRUE; END IF;
+    IF v_sj_list_ko     = 1 THEN g_has_sj_list_ko    := TRUE; END IF;
+    IF v_underlying_ko  = 1 THEN g_has_underlying_ko := TRUE; END IF;
+
+  END check_code;
 
 BEGIN
-    -- Check the main sicovamValue first
-    DECLARE
-        v_main_result VARCHAR2(100) := 'OK';
-    BEGIN
-        -- Count dates without corresponding closures
-        SELECT COUNT(*)
-        INTO v_count_dates
-        FROM CDC_IFC_CLAUSE_HYBPAN c
-        WHERE c.CDC_IFC_DATEFIN IS NOT NULL
-        AND c.CODE = sicovamValue
-        AND NOT EXISTS (
-            SELECT 1
-            FROM CDC_IFC_CLOTURES f
-            WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
-            AND f.code = sicovamValue
-        );
+  -- 1) Vérifie l’instrument (sicovamValue)
+  check_code(sicovamValue);
 
-        -- Count closure dates without corresponding clauses
-        SELECT COUNT(*)
-        INTO v_count_dates_clotures
-        FROM CDC_IFC_CLOTURES f
-        WHERE f.code = sicovamValue
-        AND NOT EXISTS (
-            SELECT 1
-            FROM CDC_IFC_CLAUSE_HYBPAN c
-            WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
-            AND c.code = sicovamValue
-        );
+  -- 2) Vérifie chaque panier associé (mêmes règles)
+  FOR r IN c_baskets LOOP
+    check_code(r.sicopanier);
+  END LOOP;
 
-        IF v_count_dates > 0 OR v_count_dates_clotures > 0 THEN
-            v_main_result := 'Dates KO';
-        END IF;
+  -- 3) Résultat agrégé (union des problèmes vus)
+  RETURN build_result;
 
-        -- Count missing underlying components
-        SELECT COUNT(DISTINCT p.sicopanier)
-        INTO v_missing_underlying_count
-        FROM titres t
-        INNER JOIN panier p ON p.sicovam = t.codesj
-        WHERE t.sicovam = sicovamValue
-        AND p.sicopanier NOT IN (
-            SELECT DISTINCT CDC_IFC_CODE_SJ
-            FROM CDC_IFC_CLOTURES
-            WHERE Code = sicovamValue
-        );
-
-        IF v_missing_underlying_count > 0 THEN
-            IF v_main_result = 'Dates KO' THEN
-                v_main_result := 'Dates and underlying KO';
-            ELSE
-                v_main_result := 'Underlying KO';
-            END IF;
-        END IF;
-
-        -- Count expected codes
-        SELECT COUNT(DISTINCT p.sicopanier)
-        INTO v_expected_code_count
-        FROM titres t
-        INNER JOIN panier p ON p.sicovam = t.codesj
-        WHERE t.sicovam = sicovamValue;
-
-        FOR r_date IN (
-            SELECT DISTINCT CDC_IFC_DATE
-            FROM CDC_IFC_CLOTURES
-            WHERE Code = sicovamValue
-        ) LOOP
-            SELECT COUNT(DISTINCT CDC_IFC_CODE_SJ)
-            INTO v_count_missing_sousjacents
-            FROM CDC_IFC_CLOTURES
-            WHERE Code = sicovamValue
-            AND CDC_IFC_DATE = r_date.CDC_IFC_DATE;
-
-            IF v_count_missing_sousjacents < v_expected_code_count AND v_missing_underlying_count = 0 THEN
-                IF v_main_result = 'OK' THEN
-                    v_main_result := 'Dates KO';
-                ELSIF v_main_result = 'Underlying KO' THEN
-                    v_main_result := 'Dates and underlying KO';
-                END IF;
-            END IF;
-        END LOOP;
-
-        -- Update overall result
-        v_result := v_main_result; 
-    END;
-
-    -- Now check each associated basket
-    FOR r_basket IN c_baskets LOOP
-        DECLARE
-            v_basket_result VARCHAR2(100) := 'OK';
-        BEGIN
-            -- Count dates without corresponding closures
-            SELECT COUNT(*)
-            INTO v_count_dates
-            FROM CDC_IFC_CLAUSE_HYBPAN c
-            WHERE c.CDC_IFC_DATEFIN IS NOT NULL
-            AND c.CODE = r_basket.sicopanier
-            AND NOT EXISTS (
-                SELECT 1
-                FROM CDC_IFC_CLOTURES f
-                WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
-                AND f.code = r_basket.sicopanier
-            );
-
-            -- Count closure dates without corresponding clauses
-            SELECT COUNT(*)
-            INTO v_count_dates_clotures
-            FROM CDC_IFC_CLOTURES f
-            WHERE f.code = r_basket.sicopanier
-            AND NOT EXISTS (
-                SELECT 1
-                FROM CDC_IFC_CLAUSE_HYBPAN c
-                WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
-                AND c.code = r_basket.sicopanier
-            );
-
-            IF v_count_dates > 0 OR v_count_dates_clotures > 0 THEN
-                v_basket_result := 'Dates KO';
-            END IF;
-
-            -- Count missing underlying components for this basket
-            SELECT COUNT(DISTINCT p.sicopanier)
-            INTO v_missing_underlying_count
-            FROM titres t
-            INNER JOIN panier p ON p.sicovam = t.codesj
-            WHERE t.sicovam = r_basket.sicopanier
-            AND p.sicopanier NOT IN (
-                SELECT DISTINCT CDC_IFC_CODE_SJ
-                FROM CDC_IFC_CLOTURES
-                WHERE Code = r_basket.sicopanier
-            );
-
-            IF v_missing_underlying_count > 0 THEN
-                IF v_basket_result = 'Dates KO' THEN
-                    v_basket_result := 'Dates and underlying KO';
-                ELSE
-                    v_basket_result := 'Underlying KO';
-                END IF;
-            END IF;
-
-            SELECT COUNT(DISTINCT p.sicopanier)
-            INTO v_expected_code_count
-            FROM titres t
-            INNER JOIN panier p ON p.sicovam = t.codesj
-            WHERE t.sicovam = r_basket.sicopanier;
-
-            FOR r_date IN (
-                SELECT DISTINCT CDC_IFC_DATE
-                FROM CDC_IFC_CLOTURES
-                WHERE Code = r_basket.sicopanier
-            ) LOOP
-                SELECT COUNT(DISTINCT CDC_IFC_CODE_SJ)
-                INTO v_count_missing_sousjacents
-                FROM CDC_IFC_CLOTURES
-                WHERE Code = r_basket.sicopanier
-                AND CDC_IFC_DATE = r_date.CDC_IFC_DATE;
-
-                IF v_count_missing_sousjacents < v_expected_code_count AND v_missing_underlying_count = 0 THEN
-                    IF v_basket_result = 'OK' THEN
-                        v_basket_result := 'Dates KO';
-                    ELSIF v_basket_result = 'Underlying KO' THEN
-                        v_basket_result := 'Dates and underlying KO';
-                    END IF;
-                END IF;
-            END LOOP;
-
-            IF v_basket_result != 'OK' THEN
-                v_result := v_basket_result; 
-            END IF;
-
-        END; 
-    END LOOP;
-
-    RETURN v_result;
 EXCEPTION
-    WHEN OTHERS THEN
-        RETURN 'Error: ' || SQLERRM;
+  WHEN OTHERS THEN
+    RETURN 'Error: ' || SQLERRM;
 END IsFixingClausesConsistent;
 /
