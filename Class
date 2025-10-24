@@ -1,110 +1,193 @@
-WITH ChangeInfo AS (
-  SELECT
-      ats.code,
-      ats.sequence,
-      ru.name       AS changer_name,
-      atc.datemodif AS change_date
-  FROM (
-    SELECT
-        code,
-        sequence,
-        numero,
-        TRUNC(start_validity) AS start_validity,
-        LAG(TRUNC(start_validity)) OVER (
-          PARTITION BY code
-          ORDER BY numero
-        ) AS prev_start
-    FROM audit_tierssettlement
-    WHERE code IN (:AuditTierSequence, :PreviousAuditTierSequence)
-  ) ats
-  JOIN audit_tiers_compo atc
-    ON atc.sequence = ats.code    -- ✅ keep your current working link
-  LEFT JOIN riskusers ru
-    ON ru.ident = atc.id
-  WHERE ats.prev_start = DATE '2099-12-31'
-    AND ats.start_validity < DATE '2099-12-31'
-),
-SettlementResults AS (
-  SELECT 
-      ats.ID,
-      ats.ACCOUNT_ROUTER,
-      decode(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
-      ats.AGENT_ID,
-      DECODE(ats.ALLOTMENT, -1, '*', A.LIBELLE) ALLOTMENT,
-      ats.BANKID,
-      decode(ats.BANKID,-1,'*', (select name from tiers where ident in(ats.BANKID)) ) AS Financial_Institution,
-      ats.BANKNUM,
-      ats.BENEFICIAIRE,
-      ats.BO_TREASURY_ACCOUNT_ID,
-      DECODE(ats.BUSINESS_EVENT, -1, '*') BUSINESS_EVENT,
-      ats.CARVE_OUT,
-      ats.CODE,
-      ats.COMMENTAIRE1,
-      ats.CONDITION,
-      ats.CONDITION2,
-      ats.CONDITION3,
-      ats.CONTACTNAME,
-      ats.COUNTRYCODE,
-      DECODE(ats.CURRENCY, -1, '*', DEVISE_TO_STR(ats.CURRENCY)) CURRENCY,
-      ats.CUSTODIAN_ID,
-      DECODE(ats.DELIVERY_TYPE, -1, '*', 1, 'DVP', 2, 'FOP', 3, 'N/A') DELIVERY_TYPE,
-      DECODE(ats.DEPOSITARY, -1, '*', DP.NAME) DEPOSITARY,
-      ats.END_VALIDITY,
-      ats.IBKACCOUNT,
-      ats.INFO1,
-      ats.INFO2,
-      ats.INFO3,
-      ats.INFO4,
-      ats.INFO5,
-      ats.INFO6,
-      ats.INITIAL_DEPOSITORY,
-      ats.LOSTRO1_CODE,
-      ats.LOSTRO1_CODETYPE,
-      decode(ats.MARKET, -1,'*', NUM_TO_STR(ats.MARKET)  || ' - ' || (select libelle from marche where mnemomarche in (ats.MARKET) )) AS MARKET,
-      ats.PAYMENT,
-      DECODE(ats.PAYMENT, -1, '*', PM.LIBELLE) PAYMENTMETHOD,
-      PS.NAME AS PLACE_OF_SETTLEMENT,
-      ats.ROUTING,
-      ats.SEQUENCE,
-      decode(ats.SIGN,1,'(+)',2,'(0)',3,'(-)','(*)') AS Sign,
-      ats.SSI_PATH_ID,
-      ats.START_VALIDITY,
-      decode(ats.TYPE,1,'*',2,'Counterparty',3,'Broker',4,'Depositary',5,'Entity',6,'Counterparty 2',ats.TYPE) AS TYPE,
-      decode(ats.UNDERLYING_ALLOTMENT , -1,'*',(select libelle from affectation where ident = ats.UNDERLYING_ALLOTMENT )) AS UNDERLYING_ALLOTMENT,
-      decode(ats.UNDERLYING_CURRENCY, -1, '*', DEVISE_TO_STR(ats.UNDERLYING_CURRENCY)) AS UNDERLYING_CURRENCY,
-      decode(ats.UNDERLYING_MARKET, -1,'*', NUM_TO_STR(ats.UNDERLYING_MARKET)   || ' - ' || (select libelle from marche where mnemomarche in (ats.UNDERLYING_MARKET) )) AS UNDERLYING_MARKET,
-      DECODE(ats.WORKFLOW_ID, -1, 'N/A', BCW.NAME) SETTLEMENT_METHOD,
-      ats.CODE AS SOURCE_SEQUENCE,
-      tr.ident AS THIRD_SOPHIS_ID,
-      tr.reference AS THIRD_REFERENCE,
-      tr.EXTERNREF AS External_Reference,
-      tr.location AS ThirdParty_Location,
-      tr.domicile AS ThirdParty_Domicile,
-      TRIM(COALESCE(tg.ADDRESS1, '') || ' ' ||
-           COALESCE(tg.ADDRESS2, '') || ' ' ||
-           COALESCE(tg.ADDRESS3, '') || ' ' ||
-           COALESCE(tg.ADDRESS4, '') || ' ' ||
-           COALESCE(tg.ADDRESS5, '')) AS Full_Address,
-      tg.swift AS SWIFT_CODE,
-      tg.fax AS FAX_NUMBER,
-      tg.email AS EMAIL,
-      tr.NAME TIERName,
-      bsp.account_name,
-      rsk.name AS USER_NAME,
-      'SOPHIS' AS CODE_REMETTANT,
-      ci.changer_name,
-      ci.change_date
-  FROM AUDIT_TIERSSETTLEMENT ats
-  LEFT JOIN AUDIT_TIERS_COMPO atc ON ats.code = atc.SEQUENCE
-  LEFT JOIN BO_CASH_WORKFLOW BCW ON BCW.ID = ats.WORKFLOW_ID
-  LEFT JOIN TIERS tr ON tr.ident = atc.code
-  LEFT JOIN TIERS DP ON DP.IDENT = ats.DEPOSITARY
-  LEFT JOIN TIERS PS ON PS.IDENT = ats.PLACE_OF_SETTLEMENT
-  LEFT JOIN TIERSGENERAL tg ON tg.CODE = tr.ident
-  LEFT JOIN AFFECTATION A ON A.IDENT = ats.ALLOTMENT
-  LEFT JOIN PAYMENTMETHOD PM ON PM.IDENT = ats.PAYMENT
-  LEFT JOIN RISKUSERS rsk ON rsk.ident = atc.ID
-  LEFT JOIN BO_SSI_PATH bsp ON bsp.ssi_path_id = ats.ssi_path_id
-  LEFT JOIN ChangeInfo ci ON ci.code = ats.code AND ci.sequence = ats.sequence
-  WHERE ats.CODE in (:AuditTierSequence, :PreviousAuditTierSequence)
-)
+CREATE OR REPLACE FUNCTION IsFixingClausesConsistent(sicovamValue IN NUMBER)
+RETURN VARCHAR2 IS
+    v_result VARCHAR2(100) := 'OK';
+    v_count_dates NUMBER := 0;
+    v_count_dates_clotures NUMBER := 0;
+    v_missing_underlying_count NUMBER := 0;
+    v_expected_code_count NUMBER := 0;
+    v_count_missing_sousjacents NUMBER := 0;
+
+    CURSOR c_baskets IS
+        SELECT p.sicopanier
+        FROM panier p
+        WHERE p.sicovam = sicovamValue
+        AND p.quantite = 1;
+
+BEGIN
+    -- Check the main sicovamValue first
+    DECLARE
+        v_main_result VARCHAR2(100) := 'OK';
+    BEGIN
+        -- Count dates without corresponding closures
+        SELECT COUNT(*)
+        INTO v_count_dates
+        FROM CDC_IFC_CLAUSE_HYBPAN c
+        WHERE c.CDC_IFC_DATEFIN IS NOT NULL
+        AND c.CODE = sicovamValue
+        AND NOT EXISTS (
+            SELECT 1
+            FROM CDC_IFC_CLOTURES f
+            WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
+            AND f.code = sicovamValue
+        );
+
+        -- Count closure dates without corresponding clauses
+        SELECT COUNT(*)
+        INTO v_count_dates_clotures
+        FROM CDC_IFC_CLOTURES f
+        WHERE f.code = sicovamValue
+        AND NOT EXISTS (
+            SELECT 1
+            FROM CDC_IFC_CLAUSE_HYBPAN c
+            WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
+            AND c.code = sicovamValue
+        );
+
+        IF v_count_dates > 0 OR v_count_dates_clotures > 0 THEN
+            v_main_result := 'Dates KO';
+        END IF;
+
+        -- Count missing underlying components
+        SELECT COUNT(DISTINCT p.sicopanier)
+        INTO v_missing_underlying_count
+        FROM titres t
+        INNER JOIN panier p ON p.sicovam = t.codesj
+        WHERE t.sicovam = sicovamValue
+        AND p.sicopanier NOT IN (
+            SELECT DISTINCT CDC_IFC_CODE_SJ
+            FROM CDC_IFC_CLOTURES
+            WHERE Code = sicovamValue
+        );
+
+        IF v_missing_underlying_count > 0 THEN
+            IF v_main_result = 'Dates KO' THEN
+                v_main_result := 'Dates and underlying KO';
+            ELSE
+                v_main_result := 'Underlying KO';
+            END IF;
+        END IF;
+
+        -- Count expected codes
+        SELECT COUNT(DISTINCT p.sicopanier)
+        INTO v_expected_code_count
+        FROM titres t
+        INNER JOIN panier p ON p.sicovam = t.codesj
+        WHERE t.sicovam = sicovamValue;
+
+        FOR r_date IN (
+            SELECT DISTINCT CDC_IFC_DATE
+            FROM CDC_IFC_CLOTURES
+            WHERE Code = sicovamValue
+        ) LOOP
+            SELECT COUNT(DISTINCT CDC_IFC_CODE_SJ)
+            INTO v_count_missing_sousjacents
+            FROM CDC_IFC_CLOTURES
+            WHERE Code = sicovamValue
+            AND CDC_IFC_DATE = r_date.CDC_IFC_DATE;
+
+            IF v_count_missing_sousjacents < v_expected_code_count AND v_missing_underlying_count = 0 THEN
+                IF v_main_result = 'OK' THEN
+                    v_main_result := 'Dates KO';
+                ELSIF v_main_result = 'Underlying KO' THEN
+                    v_main_result := 'Dates and underlying KO';
+                END IF;
+            END IF;
+        END LOOP;
+
+        -- Update overall result
+        v_result := v_main_result; 
+    END;
+
+    -- Now check each associated basket
+    FOR r_basket IN c_baskets LOOP
+        DECLARE
+            v_basket_result VARCHAR2(100) := 'OK';
+        BEGIN
+            -- Count dates without corresponding closures
+            SELECT COUNT(*)
+            INTO v_count_dates
+            FROM CDC_IFC_CLAUSE_HYBPAN c
+            WHERE c.CDC_IFC_DATEFIN IS NOT NULL
+            AND c.CODE = r_basket.sicopanier
+            AND NOT EXISTS (
+                SELECT 1
+                FROM CDC_IFC_CLOTURES f
+                WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
+                AND f.code = r_basket.sicopanier
+            );
+
+            -- Count closure dates without corresponding clauses
+            SELECT COUNT(*)
+            INTO v_count_dates_clotures
+            FROM CDC_IFC_CLOTURES f
+            WHERE f.code = r_basket.sicopanier
+            AND NOT EXISTS (
+                SELECT 1
+                FROM CDC_IFC_CLAUSE_HYBPAN c
+                WHERE f.CDC_IFC_DATE = c.CDC_IFC_DATEFIN
+                AND c.code = r_basket.sicopanier
+            );
+
+            IF v_count_dates > 0 OR v_count_dates_clotures > 0 THEN
+                v_basket_result := 'Dates KO';
+            END IF;
+
+            -- Count missing underlying components for this basket
+            SELECT COUNT(DISTINCT p.sicopanier)
+            INTO v_missing_underlying_count
+            FROM titres t
+            INNER JOIN panier p ON p.sicovam = t.codesj
+            WHERE t.sicovam = r_basket.sicopanier
+            AND p.sicopanier NOT IN (
+                SELECT DISTINCT CDC_IFC_CODE_SJ
+                FROM CDC_IFC_CLOTURES
+                WHERE Code = r_basket.sicopanier
+            );
+
+            IF v_missing_underlying_count > 0 THEN
+                IF v_basket_result = 'Dates KO' THEN
+                    v_basket_result := 'Dates and underlying KO';
+                ELSE
+                    v_basket_result := 'Underlying KO';
+                END IF;
+            END IF;
+
+            SELECT COUNT(DISTINCT p.sicopanier)
+            INTO v_expected_code_count
+            FROM titres t
+            INNER JOIN panier p ON p.sicovam = t.codesj
+            WHERE t.sicovam = r_basket.sicopanier;
+
+            FOR r_date IN (
+                SELECT DISTINCT CDC_IFC_DATE
+                FROM CDC_IFC_CLOTURES
+                WHERE Code = r_basket.sicopanier
+            ) LOOP
+                SELECT COUNT(DISTINCT CDC_IFC_CODE_SJ)
+                INTO v_count_missing_sousjacents
+                FROM CDC_IFC_CLOTURES
+                WHERE Code = r_basket.sicopanier
+                AND CDC_IFC_DATE = r_date.CDC_IFC_DATE;
+
+                IF v_count_missing_sousjacents < v_expected_code_count AND v_missing_underlying_count = 0 THEN
+                    IF v_basket_result = 'OK' THEN
+                        v_basket_result := 'Dates KO';
+                    ELSIF v_basket_result = 'Underlying KO' THEN
+                        v_basket_result := 'Dates and underlying KO';
+                    END IF;
+                END IF;
+            END LOOP;
+
+            IF v_basket_result != 'OK' THEN
+                v_result := v_basket_result; 
+            END IF;
+
+        END; 
+    END LOOP;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN 'Error: ' || SQLERRM;
+END IsFixingClausesConsistent;
+/
