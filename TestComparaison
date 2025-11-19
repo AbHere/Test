@@ -1,0 +1,559 @@
+public class SettlementRecord
+{
+    public string NewSequence { get; set; }
+    public string OldSequence { get; set; }
+    public string IdSequence { get; set; }
+    public string AccountRouter { get; set; }
+    public string AccountType { get; set; }
+    public string AgentId { get; set; }
+    public string Allotment { get; set; }
+    public string BankId { get; set; }
+
+    public string Financial_Institution { get; set; }
+    public string BankNum { get; set; }
+    public string Beneficiaire { get; set; }
+    public string BoTreasuryAccountId { get; set; }
+    public string BusinessEvent { get; set; }
+    public string CarveOut { get; set; }
+    public string Commentaire1 { get; set; }
+    public string Condition { get; set; }
+    public string Condition2 { get; set; }
+    public string Condition3 { get; set; }
+    public string ContactName { get; set; }
+    public string CountryCode { get; set; }
+    public string Currency { get; set; }
+    public string CustodianId { get; set; }
+    public string DeliveryType { get; set; }
+    public string Depositary { get; set; }
+    public string EndValidity { get; set; }
+    public string IbkAccount { get; set; }
+    public string Info1 { get; set; }
+    public string Info2 { get; set; }
+    public string Info3 { get; set; }
+    public string Info4 { get; set; }
+    public string Info5 { get; set; }
+    public string Info6 { get; set; }
+    public string InitialDepository { get; set; }
+    public string Lostro1Code { get; set; }
+    public string Lostro1CodeType { get; set; }
+    public string Market { get; set; }
+    public string Payment { get; set; }
+    public string PlaceOfSettlement { get; set; }
+    public string Routing { get; set; }
+    public string Sequence { get; set; }
+    public string Sign { get; set; }
+    public string SsiPathId { get; set; }
+    public string StartValidity { get; set; }
+    public string Type { get; set; }
+    public string UnderlyingAllotment { get; set; }
+    public string UnderlyingCurrency { get; set; }
+    public string UnderlyingMarket { get; set; }
+    public string THIRD_SOPHIS_ID { get; set; }
+    public string THIRD_REFERENCE { get; set; }
+    public string External_Reference { get; set; }
+    public string ThirdParty_Location { get; set; }
+    public string ThirdParty_Domicile { get; set; }
+    public string Full_Address { get; set; }
+    public string SWIFT_CODE { get; set; }
+    public string FAX_NUMBER { get; set; }
+    public string EMAIL { get; set; }
+    public string TierName { get; set; }
+    public string Account_name { get; set; }
+    public string USER_NAME { get; set; }
+    public string Validator { get; set; }
+    public string Validation_Date { get; set; }
+    public string CODE_REMETTANT { get; set; }
+    public string PAYMENTMETHOD { get; set; }
+    public string SETTLEMENT_METHOD { get; set; }
+}
+
+public class AuditTier
+{
+    public int? AuditTierSequence { get; set; }
+    public string AuditTierCode { get; set; }
+    public int ActionMode { get; set; }
+    public int? PreviousAuditTierSequence { get; set; }
+    public DateTime AuditDate { get; set; }
+}
+
+public async Task<List<SettlementRecordComparison>> ProcessSSI(DateTime startDate, DateTime endDate)
+{
+    var auditTiers = await _dBContext.GetRecentAuditTiers(startDate, endDate);
+    var allComparisons = new List<SettlementRecordComparison>();
+
+    foreach (var auditTier in auditTiers)
+    {
+        var settlementResults = await _dBContext.GetSettlementResults(auditTier.AuditTierSequence, auditTier.PreviousAuditTierSequence);
+        var comparisons = _settlementComparisonService.CompareRecords(settlementResults.ToList(), auditTier);
+        allComparisons.AddRange(comparisons);
+    }
+
+    return allComparisons;
+}
+
+public List<SettlementRecordComparison> CompareRecords(IEnumerable<SettlementRecord> records, AuditTier auditTier)
+{
+    var comparisons = new List<SettlementRecordComparison>();
+
+    // Group records by SourceSequence
+    var groupedRecords = records.GroupBy(record => record.IdSequence)
+                                .ToDictionary(group => group.Key, group => group.ToList());
+
+
+    foreach (var group in groupedRecords)
+    {
+        var comparison = new SettlementRecordComparison
+        {
+            SourceSequence = group.Key,
+            AuditDate = auditTier.AuditDate,
+            AuditTierCode = auditTier.AuditTierCode,
+            AuditTierNewSequence = auditTier.AuditTierSequence,
+            AuditTierOldSequence = auditTier.PreviousAuditTierSequence,
+            IsNewRecord = group.Value.Count == 1
+        };
+
+        if (group.Value.Count > 1 &&
+            (!string.IsNullOrEmpty(group.Value[0].NewSequence) || !string.IsNullOrEmpty(group.Value[1].NewSequence)))
+        {
+            comparison.OldRecord = group.Value[0];
+            comparison.NewRecord = group.Value[1];
+
+            CompareFields(comparison);
+            comparisons.Add(comparison);
+        }
+        else if (!string.IsNullOrEmpty(group.Value[0].NewSequence) && !string.IsNullOrEmpty(group.Value[0].IdSequence))
+        {
+            if (group.Value[0].NewSequence.Equals(comparison.AuditTierNewSequence.ToString()))
+            {
+                comparison.IsCreated = true;
+                comparison.NewRecord = group.Value[0];
+                comparisons.Add(comparison);
+            }
+            else if (group.Value[0].NewSequence.Equals(comparison.AuditTierOldSequence.ToString()))
+            {
+                comparison.IsDeleted = true;
+                comparison.OldRecord = group.Value[0];
+                comparisons.Add(comparison);
+            }
+        }
+    }
+
+    return comparisons;
+}
+
+private static void CompareFields(SettlementRecordComparison comparison)
+{
+    if (comparison.OldRecord == null || comparison.NewRecord == null)
+        return;
+
+    var propertiesToIgnore = new HashSet<string>
+    {
+        nameof(SettlementRecord.NewSequence),
+        nameof(SettlementRecord.OldSequence)
+    };
+
+    PropertyInfo[] properties = typeof(SettlementRecord).GetProperties();
+
+    foreach (var property in properties)
+    {
+        if(propertiesToIgnore.Contains(property.Name)) continue;
+
+        var oldValue = property.GetValue(comparison.OldRecord)?.ToString();
+        var newValue = property.GetValue(comparison.NewRecord)?.ToString();
+
+        if (!string.Equals(oldValue, newValue))
+        {
+            comparison.ModifiedFields.Add(property.Name);
+        }
+    }
+}
+
+public async Task<IEnumerable<AuditTier>> GetRecentAuditTiers(DateTime startDate, DateTime endDate)
+{
+    var auditTiers = new List<AuditTier>();
+
+    string query = @"
+        WITH RecentRecords AS (
+            SELECT 
+                sequence AS AuditTierSequence, 
+                Code AS AuditTierCode, 
+                DateModif, 
+                ACTION_MODE
+            FROM 
+                AUDIT_TIERS_COMPO 
+            WHERE 
+                DATEMODIF >= :startDate
+            AND
+                DATEMODIF <= :endDate
+        )
+        SELECT 
+            r.AuditTierSequence, 
+            r.AuditTierCode, 
+            r.ACTION_MODE,
+            r.DateModif,
+            (SELECT p.sequence 
+             FROM AUDIT_TIERS_COMPO p 
+             WHERE p.Code = r.AuditTierCode 
+               AND p.DateModif < r.DateModif 
+             ORDER BY p.DateModif DESC 
+             FETCH FIRST 1 ROW ONLY) AS PreviousAuditTierSequence
+        FROM 
+            RecentRecords r
+        ORDER BY 
+            r.AuditTierCode, 
+            r.DateModif DESC";
+
+    using (var command = new OracleCommand(query, _connection))
+    {
+        command.Parameters.Add(new OracleParameter(":startDate", startDate));
+        command.Parameters.Add(new OracleParameter(":endDate", endDate));
+
+        using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (reader.Read())
+            {
+                var auditTier = new AuditTier
+                {
+                    AuditTierSequence = reader.GetInt32(0),
+                    AuditTierCode = reader.GetString(1),
+                    ActionMode = reader.GetInt32(2),
+                    AuditDate = reader.GetDateTime(3),
+                    PreviousAuditTierSequence = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4)
+                };
+                auditTiers.Add(auditTier);
+            }
+        }
+    }
+
+    return auditTiers;
+}
+
+    public async Task<IEnumerable<SettlementRecord>> GetSettlementResults(int? auditTierSequence, int? previousAuditTierSequence)
+    {
+        var settlementResults = new List<SettlementRecord>();
+
+        string query = ReadEmbeddedResource(DbConstants.SSIExtractionSQLPath);
+
+        using (var command = new OracleCommand(query, _connection))
+        {
+            command.Parameters.Add(new OracleParameter(":AuditTierSequence", auditTierSequence));
+            command.Parameters.Add(new OracleParameter(":PreviousAuditTierSequence", (object)previousAuditTierSequence ?? DBNull.Value));
+
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (reader.Read())
+                {
+#pragma warning disable CS8601 // Existence possible d'une assignation de référence null.
+                    var settlementResult = new SettlementRecord
+                    {
+                        NewSequence = reader["NewSequence"].ToString(),
+                        OldSequence = reader["OldSequence"].ToString(),
+                        IdSequence = reader["ID_SEQUENCE1"].ToString(),
+                        TierName = reader["TierName"].ToString(),
+                        AccountRouter = reader["ACCOUNT_ROUTER_1"].ToString(),
+                        AccountType = reader["ACCOUNT_TYPE_1"].ToString(),
+                        AgentId = reader["AGENT_ID_1"].ToString(),
+                        Allotment = reader["ALLOTMENT_1"].ToString(),
+                        BankId = reader["BANKID_1"].ToString(),
+                        Financial_Institution = reader["Financial_Institution"].ToString(),
+                        BankNum = reader["BANKNUM_1"].ToString(),
+                        Beneficiaire = reader["BENEFICIAIRE_1"].ToString(),
+                        BoTreasuryAccountId = reader["BO_TREASURY_ACCOUNT_ID_1"].ToString(),
+                        BusinessEvent = reader["BUSINESS_EVENT_1"].ToString(),
+                        CarveOut = reader["CARVE_OUT_1"].ToString(),
+                        Commentaire1 = reader["COMMENTAIRE1_1"].ToString(),
+                        Condition = reader["CONDITION_1"].ToString(),
+                        Condition2 = reader["CONDITION2_1"].ToString(),
+                        Condition3 = reader["CONDITION3_1"].ToString(),
+                        ContactName = reader["CONTACTNAME_1"].ToString(),
+                        CountryCode = reader["COUNTRYCODE_1"].ToString(),
+                        Currency = reader["CURRENCY_1"].ToString(),
+                        CustodianId = reader["CUSTODIAN_ID_1"].ToString(),
+                        DeliveryType = reader["DELIVERY_TYPE_1"].ToString(),
+                        Depositary = reader["DEPOSITARY_1"].ToString(),
+                        EndValidity = reader["END_VALIDITY_1"].ToString(),
+                        IbkAccount = reader["IBKACCOUNT_1"].ToString(),
+                        Info1 = reader["INFO1_1"].ToString(),
+                        Info2 = reader["INFO2_1"].ToString(),
+                        Info3 = reader["INFO3_1"].ToString(),
+                        Info4 = reader["INFO4_1"].ToString(),
+                        Info5 = reader["INFO5_1"].ToString(),
+                        Info6 = reader["INFO6_1"].ToString(),
+                        InitialDepository = reader["INITIAL_DEPOSITORY_1"].ToString(),
+                        Lostro1Code = reader["LOSTRO1_CODE_1"].ToString(),
+                        Lostro1CodeType = reader["LOSTRO1_CODETYPE_1"].ToString(),
+                        Market = reader["MARKET_1"].ToString(),
+                        Payment = reader["PAYMENT_1"].ToString(),
+                        PlaceOfSettlement = reader["PLACE_OF_SETTLEMENT_1"].ToString(),
+                        Routing = reader["ROUTING_1"].ToString(),
+                        Sequence = reader["SEQUENCE_1"].ToString(),
+                        Sign = reader["SIGN_1"].ToString(),
+                        SsiPathId = reader["SSI_PATH_ID_1"].ToString(),
+                        StartValidity = reader["START_VALIDITY_1"].ToString(),
+                        Type = reader["TYPE_1"].ToString(),
+                        UnderlyingAllotment = reader["UNDERLYING_ALLOTMENT_1"].ToString(),
+                        UnderlyingCurrency = reader["UNDERLYING_CURRENCY_1"].ToString(),
+                        UnderlyingMarket = reader["UNDERLYING_MARKET_1"].ToString(),
+                        SETTLEMENT_METHOD = reader["SETTLEMENT_METHOD_1"].ToString(),
+                        THIRD_SOPHIS_ID = reader["THIRD_SOPHIS_ID"].ToString(),
+                        THIRD_REFERENCE = reader["THIRD_REFERENCE"].ToString(),
+                        External_Reference = reader["External_Reference"].ToString(),
+                        ThirdParty_Location = reader["ThirdParty_Location"].ToString(),
+                        ThirdParty_Domicile = reader["ThirdParty_Domicile"].ToString(),
+                        Full_Address = reader["Full_Address"].ToString(),
+                        SWIFT_CODE = reader["SWIFT_CODE"].ToString(),
+                        FAX_NUMBER = reader["FAX_NUMBER"].ToString(),
+                        EMAIL = reader["EMAIL"].ToString(),
+                        Account_name = reader["Account_name"].ToString(),
+                        USER_NAME = reader["USER_NAME"].ToString(),
+                        Validator = reader["Validator"].ToString(),
+                        Validation_Date = reader["Validation_Date"].ToString(),
+                        CODE_REMETTANT = reader["CODE_REMETTANT"].ToString(),
+                        PAYMENTMETHOD = reader["PAYMENTMETHOD"].ToString()
+                    };
+#pragma warning restore CS8601 // Existence possible d'une assignation de référence null.
+                    settlementResults.Add(settlementResult);
+                }
+            }
+        }
+        return settlementResults;
+    }
+
+
+Content of DbConstants.SSIExtractionSQLPath is :
+
+WITH ChangeInfo AS (
+  SELECT
+      ats.code,
+      ats.sequence,
+      ru.name       AS changer_name,
+      atc.datemodif AS change_date
+  FROM (
+    SELECT
+        code,
+        sequence,
+        numero,
+        TRUNC(start_validity) AS start_validity,
+        LAG(TRUNC(start_validity)) OVER (
+          PARTITION BY code
+          ORDER BY numero
+        ) AS prev_start
+    FROM audit_tierssettlement
+    WHERE code IN (:AuditTierSequence, :PreviousAuditTierSequence)
+  ) ats
+  JOIN AUDIT_TIERS_COMPO atc
+    ON atc.sequence = ats.code
+  LEFT JOIN riskusers ru
+    ON ru.ident = atc.id
+  WHERE ats.prev_start = DATE '2099-12-31'
+    AND ats.start_validity < DATE '2099-12-31'
+), 
+SettlementResults AS (
+SELECT 
+	ats.ID,
+	ats.ACCOUNT_ROUTER,
+	decode(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
+	ats.AGENT_ID,
+    DECODE(ats.ALLOTMENT, -1, '*', A.LIBELLE) ALLOTMENT,
+	ats.BANKID,
+    decode(ats.BANKID,-1,'*', (select name from tiers where ident in(ats.BANKID)) ) AS Financial_Institution,
+	ats.BANKNUM,
+	ats.BENEFICIAIRE,
+	ats.BO_TREASURY_ACCOUNT_ID,
+    DECODE(ats.BUSINESS_EVENT, -1, '*') BUSINESS_EVENT,
+	ats.CARVE_OUT,
+    ats.CODE,
+	ats.COMMENTAIRE1,
+	ats.CONDITION,
+	ats.CONDITION2,
+	ats.CONDITION3,
+	ats.CONTACTNAME,
+	ats.COUNTRYCODE,
+	DECODE(ats.CURRENCY, -1, '*', DEVISE_TO_STR(ats.CURRENCY)) CURRENCY,
+	ats.CUSTODIAN_ID,
+    DECODE(ats.DELIVERY_TYPE, -1, '*', 1, 'DVP', 2, 'FOP', 3, 'N/A') DELIVERY_TYPE,
+    DECODE(ats.DEPOSITARY, -1, '*', DP.NAME) DEPOSITARY,
+	ats.END_VALIDITY,
+	ats.IBKACCOUNT,
+	ats.INFO1,
+	ats.INFO2,
+	ats.INFO3,
+	ats.INFO4,
+	ats.INFO5,
+	ats.INFO6,
+	ats.INITIAL_DEPOSITORY,
+	ats.LOSTRO1_CODE,
+	ats.LOSTRO1_CODETYPE,
+	decode(ats.MARKET, -1,'*', NUM_TO_STR(ats.MARKET)  || ' - ' || (select libelle from marche where mnemomarche in (ats.MARKET) )) AS MARKET,
+	ats.PAYMENT,
+    DECODE(ats.PAYMENT, -1, '*', PM.LIBELLE) PAYMENTMETHOD,
+    PS.NAME AS PLACE_OF_SETTLEMENT,
+	ats.ROUTING,
+	ats.SEQUENCE,
+	decode(ats.SIGN,1,'(+)',2,'(0)',3,'(-)','(*)') AS Sign,
+	ats.SSI_PATH_ID,
+	ats.START_VALIDITY,
+	decode(ats.TYPE,1,'*',2,'Counterparty',3,'Broker',4,'Depositary',5,'Entity',6,'Counterparty 2',ats.TYPE) AS TYPE,
+	decode(ats.UNDERLYING_ALLOTMENT , -1,'*',(select libelle from affectation where ident = ats.UNDERLYING_ALLOTMENT )) AS UNDERLYING_ALLOTMENT,
+	decode(ats.UNDERLYING_CURRENCY, -1, '*', DEVISE_TO_STR(ats.UNDERLYING_CURRENCY)) AS UNDERLYING_CURRENCY,
+	decode(ats.UNDERLYING_MARKET, -1,'*', NUM_TO_STR(ats.UNDERLYING_MARKET)   || ' - ' || (select libelle from marche where mnemomarche in (ats.UNDERLYING_MARKET) )) AS UNDERLYING_MARKET,
+	DECODE(ats.WORKFLOW_ID, -1, 'N/A', BCW.NAME) SETTLEMENT_METHOD,
+	ats.CODE AS SOURCE_SEQUENCE,
+    tr.ident AS THIRD_SOPHIS_ID,
+    tr.reference AS THIRD_REFERENCE,
+    tr.EXTERNREF AS External_Reference,
+    tr.location AS ThirdParty_Location,
+    tr.domicile AS ThirdParty_Domicile,
+    TRIM(COALESCE(tg.ADDRESS1, '') || ' ' ||
+         COALESCE(tg.ADDRESS2, '') || ' ' ||
+         COALESCE(tg.ADDRESS3, '') || ' ' ||
+         COALESCE(tg.ADDRESS4, '') || ' ' ||
+         COALESCE(tg.ADDRESS5, '')) AS Full_Address,
+    tg.swift AS SWIFT_CODE,
+    tg.fax AS FAX_NUMBER,
+    tg.email AS EMAIL,
+    tr.NAME TIERName,
+    bsp.account_name,
+    rsk.name AS USER_NAME,
+    ci.changer_name AS Validator,
+    ci.change_date AS Validation_Date,
+    'SOPHIS' AS CODE_REMETTANT
+FROM AUDIT_TIERSSETTLEMENT ats
+LEFT JOIN AUDIT_TIERS_COMPO atc ON ats.code = atc.SEQUENCE 
+LEFT JOIN BO_CASH_WORKFLOW BCW ON BCW.ID = ats.WORKFLOW_ID
+LEFT JOIN TIERS tr ON tr.ident = atc.code
+LEFT JOIN TIERS DP ON DP.IDENT = ats.DEPOSITARY
+LEFT JOIN TIERS PS ON PS.IDENT = ats.PLACE_OF_SETTLEMENT
+LEFT JOIN TIERSGENERAL tg ON tg.CODE = tr.ident
+LEFT JOIN AFFECTATION A ON A.IDENT = ats.ALLOTMENT
+LEFT JOIN PAYMENTMETHOD PM ON PM.IDENT = ats.PAYMENT
+LEFT JOIN RISKUSERS rsk ON rsk.ident = atc.ID
+LEFT JOIN BO_SSI_PATH bsp ON bsp.ssi_path_id = ats.ssi_path_id
+LEFT JOIN ChangeInfo ci ON ci.code = ats.code AND ci.sequence = ats.sequence
+WHERE  
+	ats.CODE in (:AuditTierSequence, :PreviousAuditTierSequence)
+)
+SELECT 
+r1.SOURCE_SEQUENCE AS NewSequence,
+r2.SOURCE_SEQUENCE AS OldSequence,
+r1.ID AS ID_SEQUENCE1,
+r1.TIERName AS TierName,
+r1.ACCOUNT_ROUTER AS ACCOUNT_ROUTER_1,
+r1.ACCOUNT_TYPE AS ACCOUNT_TYPE_1,
+r1.AGENT_ID AS AGENT_ID_1,
+r1.ALLOTMENT AS ALLOTMENT_1,
+r1.BANKID AS BANKID_1,
+r1.Financial_Institution,
+r1.BANKNUM AS BANKNUM_1,
+r1.BENEFICIAIRE AS BENEFICIAIRE_1,
+r1.BO_TREASURY_ACCOUNT_ID AS BO_TREASURY_ACCOUNT_ID_1,
+r1.BUSINESS_EVENT AS BUSINESS_EVENT_1,
+r1.CARVE_OUT AS CARVE_OUT_1,
+r1.COMMENTAIRE1 AS COMMENTAIRE1_1,
+r1.CONDITION AS CONDITION_1,
+r1.CONDITION2 AS CONDITION2_1,
+r1.CONDITION3 AS CONDITION3_1,
+r1.CONTACTNAME AS CONTACTNAME_1,
+r1.COUNTRYCODE AS COUNTRYCODE_1,
+r1.CURRENCY AS CURRENCY_1,
+r1.CUSTODIAN_ID AS CUSTODIAN_ID_1,
+r1.DELIVERY_TYPE AS DELIVERY_TYPE_1,
+r1.DEPOSITARY AS DEPOSITARY_1,
+r1.END_VALIDITY AS END_VALIDITY_1,
+r1.IBKACCOUNT AS IBKACCOUNT_1,
+r1.INFO1 AS INFO1_1,
+r1.INFO2 AS INFO2_1,
+r1.INFO3 AS INFO3_1,
+r1.INFO4 AS INFO4_1,
+r1.INFO5 AS INFO5_1,
+r1.INFO6 AS INFO6_1,
+r1.INITIAL_DEPOSITORY AS INITIAL_DEPOSITORY_1,
+r1.LOSTRO1_CODE AS LOSTRO1_CODE_1,
+r1.LOSTRO1_CODETYPE AS LOSTRO1_CODETYPE_1,
+r1.MARKET AS MARKET_1,
+r1.PAYMENT AS PAYMENT_1,
+r1.PAYMENTMETHOD AS PAYMENTMETHOD,
+r1.PLACE_OF_SETTLEMENT AS PLACE_OF_SETTLEMENT_1,
+r1.ROUTING AS ROUTING_1,
+r1.SEQUENCE AS SEQUENCE_1,
+r1.SIGN AS SIGN_1,
+r1.SSI_PATH_ID AS SSI_PATH_ID_1,
+r1.START_VALIDITY AS START_VALIDITY_1,
+r1.TYPE AS TYPE_1,
+r1.UNDERLYING_ALLOTMENT AS UNDERLYING_ALLOTMENT_1,
+r1.UNDERLYING_CURRENCY AS UNDERLYING_CURRENCY_1,
+r1.UNDERLYING_MARKET AS UNDERLYING_MARKET_1,
+r1.SETTLEMENT_METHOD AS SETTLEMENT_METHOD_1,
+r1.THIRD_SOPHIS_ID,
+r1.THIRD_REFERENCE,
+r1.External_Reference,
+r1.ThirdParty_Location,
+r1.ThirdParty_Domicile,
+r1.Full_Address,
+r1.SWIFT_CODE,
+r1.FAX_NUMBER,
+r1.EMAIL,
+r1.account_name AS Account_name,
+r1.USER_NAME,
+r1.Validator,
+r1.Validation_Date,
+r1.CODE_REMETTANT
+FROM 
+SettlementResults r1
+FULL OUTER JOIN 
+SettlementResults r2 ON r1.ID = r2.ID AND r1.SOURCE_SEQUENCE <> r2.SOURCE_SEQUENCE
+WHERE 
+r1.ID IS NULL OR r2.ID IS NULL OR 
+r1.ACCOUNT_ROUTER <> r2.ACCOUNT_ROUTER OR
+r1.ACCOUNT_TYPE <> r2.ACCOUNT_TYPE OR
+r1.AGENT_ID <> r2.AGENT_ID OR
+r1.ALLOTMENT <> r2.ALLOTMENT OR
+r1.BANKID <> r2.BANKID OR
+r1.BANKNUM <> r2.BANKNUM OR
+r1.BENEFICIAIRE <> r2.BENEFICIAIRE OR
+r1.BO_TREASURY_ACCOUNT_ID <> r2.BO_TREASURY_ACCOUNT_ID OR
+r1.BUSINESS_EVENT <> r2.BUSINESS_EVENT OR
+r1.CARVE_OUT <> r2.CARVE_OUT OR
+r1.COMMENTAIRE1 <> r2.COMMENTAIRE1 OR
+r1.CONDITION <> r2.CONDITION OR
+r1.CONDITION2 <> r2.CONDITION2 OR
+r1.CONDITION3 <> r2.CONDITION3 OR
+r1.CONTACTNAME <> r2.CONTACTNAME OR
+r1.COUNTRYCODE <> r2.COUNTRYCODE OR
+r1.CURRENCY <> r2.CURRENCY OR
+r1.CUSTODIAN_ID <> r2.CUSTODIAN_ID OR
+r1.DELIVERY_TYPE <> r2.DELIVERY_TYPE OR
+r1.DEPOSITARY <> r2.DEPOSITARY OR
+r1.END_VALIDITY <> r2.END_VALIDITY OR
+r1.IBKACCOUNT <> r2.IBKACCOUNT OR
+r1.INFO1 <> r2.INFO1 OR
+r1.INFO2 <> r2.INFO2 OR
+r1.INFO3 <> r2.INFO3 OR
+r1.INFO4 <> r2.INFO4 OR
+r1.INFO5 <> r2.INFO5 OR
+r1.INFO6 <> r2.INFO6 OR
+r1.INITIAL_DEPOSITORY <> r2.INITIAL_DEPOSITORY OR
+r1.LOSTRO1_CODE <> r2.LOSTRO1_CODE OR
+r1.LOSTRO1_CODETYPE <> r2.LOSTRO1_CODETYPE OR
+r1.MARKET <> r2.MARKET OR
+r1.PAYMENT <> r2.PAYMENT OR
+r1.PLACE_OF_SETTLEMENT <> r2.PLACE_OF_SETTLEMENT OR
+r1.ROUTING <> r2.ROUTING OR
+r1.SEQUENCE <> r2.SEQUENCE OR
+r1.SIGN <> r2.SIGN OR
+r1.SSI_PATH_ID <> r2.SSI_PATH_ID OR
+r1.START_VALIDITY <> r2.START_VALIDITY OR
+r1.TYPE <> r2.TYPE OR
+r1.External_Reference <> r2.External_Reference OR
+r1.ThirdParty_Location <> r2.ThirdParty_Location OR
+r1.ThirdParty_Domicile <> r2.ThirdParty_Domicile OR
+r1.Full_Address <> r2.Full_Address OR
+r1.SWIFT_CODE <> r2.SWIFT_CODE OR
+r1.FAX_NUMBER <> r2.FAX_NUMBER OR
+r1.EMAIL <> r2.EMAIL OR
+r1.UNDERLYING_ALLOTMENT <> r2.UNDERLYING_ALLOTMENT OR
+r1.UNDERLYING_CURRENCY <> r2.UNDERLYING_CURRENCY OR
+r1.UNDERLYING_MARKET <> r2.UNDERLYING_MARKET OR
+r1.SETTLEMENT_METHOD <> r2.SETTLEMENT_METHOD;
+
+
