@@ -1,262 +1,252 @@
 WITH ChangeInfo AS (
+  SELECT
+      ats.code,
+      ats.sequence,
+      ru.name       AS changer_name,
+      atc.datemodif AS change_date
+  FROM (
     SELECT
-        x.code,
-        x.sequence,
-        x.changer_name,
-        x.change_date
+        code,
+        sequence,
+        numero,
+        TRUNC(start_validity) AS start_validity,
+        LAG(TRUNC(start_validity)) OVER (
+          PARTITION BY code
+          ORDER BY numero
+        ) AS prev_start
+    FROM audit_tierssettlement
+    WHERE code IN (:AuditTierSequence, :PreviousAuditTierSequence)
+  ) ats
+  JOIN AUDIT_TIERS_COMPO atc
+    ON atc.sequence = ats.code
+  LEFT JOIN riskusers ru
+    ON ru.ident = atc.id
+  WHERE ats.prev_start   = DATE '2099-12-31'
+    AND ats.start_validity < DATE '2099-12-31'
+), 
+
+-- 1) tes résultats bruts, inchangés
+SettlementResultsRaw AS (
+SELECT 
+	ats.ID,
+	ats.ACCOUNT_ROUTER,
+	decode(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
+	ats.AGENT_ID,
+    DECODE(ats.ALLOTMENT, -1, '*', A.LIBELLE) ALLOTMENT,
+	ats.BANKID,
+    decode(ats.BANKID,-1,'*', (select name from tiers where ident in(ats.BANKID)) ) AS Financial_Institution,
+	ats.BANKNUM,
+	ats.BENEFICIAIRE,
+	ats.BO_TREASURY_ACCOUNT_ID,
+    DECODE(ats.BUSINESS_EVENT, -1, '*') BUSINESS_EVENT,
+	ats.CARVE_OUT,
+    ats.CODE,
+	ats.COMMENTAIRE1,
+	ats.CONDITION,
+	ats.CONDITION2,
+	ats.CONDITION3,
+	ats.CONTACTNAME,
+	ats.COUNTRYCODE,
+	DECODE(ats.CURRENCY, -1, '*', DEVISE_TO_STR(ats.CURRENCY)) CURRENCY,
+	ats.CUSTODIAN_ID,
+    DECODE(ats.DELIVERY_TYPE, -1, '*', 1, 'DVP', 2, 'FOP', 3, 'N/A') DELIVERY_TYPE,
+    DECODE(ats.DEPOSITARY, -1, '*', DP.NAME) DEPOSITARY,
+	ats.END_VALIDITY,
+	ats.IBKACCOUNT,
+	ats.INFO1,
+	ats.INFO2,
+	ats.INFO3,
+	ats.INFO4,
+	ats.INFO5,
+	ats.INFO6,
+	ats.INITIAL_DEPOSITORY,
+	ats.LOSTRO1_CODE,
+	ats.LOSTRO1_CODETYPE,
+	decode(ats.MARKET, -1,'*', NUM_TO_STR(ats.MARKET)  || ' - ' || (select libelle from marche where mnemomarche in (ats.MARKET) )) AS MARKET,
+	ats.PAYMENT,
+    DECODE(ats.PAYMENT, -1, '*', PM.LIBELLE) PAYMENTMETHOD,
+    PS.NAME AS PLACE_OF_SETTLEMENT,
+	ats.ROUTING,
+	ats.SEQUENCE,
+	decode(ats.SIGN,1,'(+)',2,'(0)',3,'(-)','(*)') AS Sign,
+	ats.SSI_PATH_ID,
+	ats.START_VALIDITY,
+	decode(ats.TYPE,1,'*',2,'Counterparty',3,'Broker',4,'Depositary',5,'Entity',6,'Counterparty 2',ats.TYPE) AS TYPE,
+	decode(ats.UNDERLYING_ALLOTMENT , -1,'*',(select libelle from affectation where ident = ats.UNDERLYING_ALLOTMENT )) AS UNDERLYING_ALLOTMENT,
+	decode(ats.UNDERLYING_CURRENCY, -1, '*', DEVISE_TO_STR(ats.UNDERLYING_CURRENCY)) AS UNDERLYING_CURRENCY,
+	decode(ats.UNDERLYING_MARKET, -1,'*', NUM_TO_STR(ats.UNDERLYING_MARKET)   || ' - ' || (select libelle from marche where mnemomarche in (ats.UNDERLYING_MARKET) )) AS UNDERLYING_MARKET,
+	DECODE(ats.WORKFLOW_ID, -1, 'N/A', BCW.NAME) SETTLEMENT_METHOD,
+	ats.CODE AS SOURCE_SEQUENCE,
+    tr.ident AS THIRD_SOPHIS_ID,
+    tr.reference AS THIRD_REFERENCE,
+    tr.EXTERNREF AS External_Reference,
+    tr.location AS ThirdParty_Location,
+    tr.domicile AS ThirdParty_Domicile,
+    TRIM(COALESCE(tg.ADDRESS1, '') || ' ' ||
+         COALESCE(tg.ADDRESS2, '') || ' ' ||
+         COALESCE(tg.ADDRESS3, '') || ' ' ||
+         COALESCE(tg.ADDRESS4, '') || ' ' ||
+         COALESCE(tg.ADDRESS5, '')) AS Full_Address,
+    tg.swift AS SWIFT_CODE,
+    tg.fax AS FAX_NUMBER,
+    tg.email AS EMAIL,
+    tr.NAME TIERName,
+    bsp.account_name,
+    rsk.name AS USER_NAME,
+    ci.changer_name AS Validator,
+    ci.change_date AS Validation_Date,
+    'SOPHIS' AS CODE_REMETTANT
+FROM AUDIT_TIERSSETTLEMENT ats
+LEFT JOIN AUDIT_TIERS_COMPO atc ON ats.code = atc.SEQUENCE 
+LEFT JOIN BO_CASH_WORKFLOW BCW ON BCW.ID = ats.WORKFLOW_ID
+LEFT JOIN TIERS tr ON tr.ident = atc.code
+LEFT JOIN TIERS DP ON DP.IDENT = ats.DEPOSITARY
+LEFT JOIN TIERS PS ON PS.IDENT = ats.PLACE_OF_SETTLEMENT
+LEFT JOIN TIERSGENERAL tg ON tg.CODE = tr.ident
+LEFT JOIN AFFECTATION A ON A.IDENT = ats.ALLOTMENT
+LEFT JOIN PAYMENTMETHOD PM ON PM.IDENT = ats.PAYMENT
+LEFT JOIN RISKUSERS rsk ON rsk.ident = atc.ID
+LEFT JOIN BO_SSI_PATH bsp ON bsp.ssi_path_id = ats.ssi_path_id
+LEFT JOIN ChangeInfo ci ON ci.code = ats.code AND ci.sequence = ats.sequence
+WHERE  
+	ats.CODE in (:AuditTierSequence, :PreviousAuditTierSequence)
+),
+
+-- 2) déduplication : 1 seule ligne par (ID, SOURCE_SEQUENCE)
+SettlementResults AS (
+    SELECT *
     FROM (
         SELECT
-            ats.code,
-            ats.sequence,
-            ru.name       AS changer_name,
-            atc.datemodif AS change_date,
+            sr.*,
             ROW_NUMBER() OVER (
-                PARTITION BY ats.code, ats.sequence
-                ORDER BY atc.datemodif DESC
+                PARTITION BY sr.ID, sr.SOURCE_SEQUENCE
+                ORDER BY sr.START_VALIDITY DESC
             ) AS rn
-        FROM (
-            SELECT
-                code,
-                sequence,
-                numero,
-                TRUNC(start_validity) AS start_validity,
-                LAG(TRUNC(start_validity)) OVER (
-                    PARTITION BY code
-                    ORDER BY numero
-                ) AS prev_start
-            FROM audit_tierssettlement
-            -- ici on travaille bien par SEQUENCE d'audit
-            WHERE sequence IN (:AuditTierSequence, :PreviousAuditTierSequence)
-        ) ats
-        JOIN AUDIT_TIERS_COMPO atc
-          ON atc.sequence = ats.sequence
-        LEFT JOIN riskusers ru
-          ON ru.ident = atc.id
-        WHERE ats.prev_start   = DATE '2099-12-31'
-          AND ats.start_validity < DATE '2099-12-31'
-    ) x
-    WHERE x.rn = 1
-),
-SettlementResults AS (
-    SELECT 
-        ats.ID,
-        ats.ACCOUNT_ROUTER,
-        DECODE(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
-        ats.AGENT_ID,
-        DECODE(ats.ALLOTMENT, -1, '*', A.LIBELLE) ALLOTMENT,
-        ats.BANKID,
-        DECODE(ats.BANKID,-1,'*', (SELECT name FROM tiers WHERE ident IN(ats.BANKID)) ) AS Financial_Institution,
-        ats.BANKNUM,
-        ats.BENEFICIAIRE,
-        ats.BO_TREASURY_ACCOUNT_ID,
-        DECODE(ats.BUSINESS_EVENT, -1, '*') BUSINESS_EVENT,
-        ats.CARVE_OUT,
-        ats.CODE,
-        ats.COMMENTAIRE1,
-        ats.CONDITION,
-        ats.CONDITION2,
-        ats.CONDITION3,
-        ats.CONTACTNAME,
-        ats.COUNTRYCODE,
-        DECODE(ats.CURRENCY, -1, '*', DEVISE_TO_STR(ats.CURRENCY)) CURRENCY,
-        ats.CUSTODIAN_ID,
-        DECODE(ats.DELIVERY_TYPE, -1, '*', 1, 'DVP', 2, 'FOP', 3, 'N/A') DELIVERY_TYPE,
-        DECODE(ats.DEPOSITARY, -1, '*', DP.NAME) DEPOSITARY,
-        ats.END_VALIDITY,
-        ats.IBKACCOUNT,
-        ats.INFO1,
-        ats.INFO2,
-        ats.INFO3,
-        ats.INFO4,
-        ats.INFO5,
-        ats.INFO6,
-        ats.INITIAL_DEPOSITORY,
-        ats.LOSTRO1_CODE,
-        ats.LOSTRO1_CODETYPE,
-        DECODE(ats.MARKET, -1,'*', NUM_TO_STR(ats.MARKET) || ' - '
-               || (SELECT libelle FROM marche WHERE mnemomarche IN (ats.MARKET))) AS MARKET,
-        ats.PAYMENT,
-        DECODE(ats.PAYMENT, -1, '*', PM.LIBELLE) PAYMENTMETHOD,
-        PS.NAME AS PLACE_OF_SETTLEMENT,
-        ats.ROUTING,
-        ats.SEQUENCE          AS AUDIT_SEQUENCE,  -- important
-        DECODE(ats.SIGN,1,'(+)',2,'(0)',3,'(-)','(*)') AS Sign,
-        ats.SSI_PATH_ID,
-        ats.START_VALIDITY,
-        DECODE(ats.TYPE,1,'*',2,'Counterparty',3,'Broker',4,'Depositary',5,'Entity',6,'Counterparty 2',ats.TYPE) AS TYPE,
-        DECODE(ats.UNDERLYING_ALLOTMENT , -1,'*',
-               (SELECT libelle FROM affectation WHERE ident = ats.UNDERLYING_ALLOTMENT )) AS UNDERLYING_ALLOTMENT,
-        DECODE(ats.UNDERLYING_CURRENCY, -1, '*', DEVISE_TO_STR(ats.UNDERLYING_CURRENCY)) AS UNDERLYING_CURRENCY,
-        DECODE(ats.UNDERLYING_MARKET, -1,'*', NUM_TO_STR(ats.UNDERLYING_MARKET) || ' - '
-               || (SELECT libelle FROM marche WHERE mnemomarche IN (ats.UNDERLYING_MARKET))) AS UNDERLYING_MARKET,
-        DECODE(ats.WORKFLOW_ID, -1, 'N/A', BCW.NAME) SETTLEMENT_METHOD,
-        ats.CODE              AS SOURCE_SEQUENCE,  -- ce qui sera NewSequence / OldSequence
-        tr.ident              AS THIRD_SOPHIS_ID,
-        tr.reference          AS THIRD_REFERENCE,
-        tr.EXTERNREF          AS External_Reference,
-        tr.location           AS ThirdParty_Location,
-        tr.domicile           AS ThirdParty_Domicile,
-        TRIM(COALESCE(tg.ADDRESS1, '') || ' ' ||
-             COALESCE(tg.ADDRESS2, '') || ' ' ||
-             COALESCE(tg.ADDRESS3, '') || ' ' ||
-             COALESCE(tg.ADDRESS4, '') || ' ' ||
-             COALESCE(tg.ADDRESS5, '')) AS Full_Address,
-        tg.swift              AS SWIFT_CODE,
-        tg.fax                AS FAX_NUMBER,
-        tg.email              AS EMAIL,
-        tr.NAME               AS TIERName,
-        bsp.account_name,
-        rsk.name              AS USER_NAME,
-        ci.changer_name       AS Validator,
-        ci.change_date        AS Validation_Date,
-        'SOPHIS'              AS CODE_REMETTANT
-    FROM AUDIT_TIERSSETTLEMENT ats
-    -- ici on corrige la jointure : SEQUENCE <-> SEQUENCE
-    LEFT JOIN AUDIT_TIERS_COMPO atc ON ats.SEQUENCE = atc.SEQUENCE
-    LEFT JOIN BO_CASH_WORKFLOW BCW   ON BCW.ID = ats.WORKFLOW_ID
-    LEFT JOIN TIERS tr               ON tr.ident = atc.code
-    LEFT JOIN TIERS DP               ON DP.IDENT = ats.DEPOSITARY
-    LEFT JOIN TIERS PS               ON PS.IDENT = ats.PLACE_OF_SETTLEMENT
-    LEFT JOIN TIERSGENERAL tg        ON tg.CODE = tr.ident
-    LEFT JOIN AFFECTATION A          ON A.IDENT = ats.ALLOTMENT
-    LEFT JOIN PAYMENTMETHOD PM       ON PM.IDENT = ats.PAYMENT
-    LEFT JOIN RISKUSERS rsk          ON rsk.ident = atc.ID
-    LEFT JOIN BO_SSI_PATH bsp        ON bsp.ssi_path_id = ats.ssi_path_id
-    LEFT JOIN ChangeInfo ci
-           ON ci.code     = ats.code
-          AND ci.sequence = ats.sequence
-    -- IMPORTANT : on filtre par SEQUENCE d'audit, pas par CODE
-    WHERE ats.SEQUENCE IN (:AuditTierSequence, :PreviousAuditTierSequence)
-),
-NewResults AS (
-    SELECT * FROM SettlementResults
-    WHERE AUDIT_SEQUENCE = :AuditTierSequence
-),
-OldResults AS (
-    SELECT * FROM SettlementResults
-    WHERE AUDIT_SEQUENCE = :PreviousAuditTierSequence
+        FROM SettlementResultsRaw sr
+    )
+    WHERE rn = 1
 )
+
+-- 3) ta requête finale, inchangée mais sur SettlementResults dédupliqué
 SELECT 
-    NewResults.SOURCE_SEQUENCE                                       AS NewSequence,
-    OldResults.SOURCE_SEQUENCE                                       AS OldSequence,
-    COALESCE(NewResults.ID, OldResults.ID)                           AS ID_SEQUENCE1,
-    COALESCE(NewResults.TIERName, OldResults.TIERName)               AS TierName,
-    COALESCE(NewResults.ACCOUNT_ROUTER, OldResults.ACCOUNT_ROUTER)   AS ACCOUNT_ROUTER_1,
-    COALESCE(NewResults.ACCOUNT_TYPE, OldResults.ACCOUNT_TYPE)       AS ACCOUNT_TYPE_1,
-    COALESCE(NewResults.AGENT_ID, OldResults.AGENT_ID)               AS AGENT_ID_1,
-    COALESCE(NewResults.ALLOTMENT, OldResults.ALLOTMENT)             AS ALLOTMENT_1,
-    COALESCE(NewResults.BANKID, OldResults.BANKID)                   AS BANKID_1,
-    COALESCE(NewResults.Financial_Institution, OldResults.Financial_Institution) AS Financial_Institution,
-    COALESCE(NewResults.BANKNUM, OldResults.BANKNUM)                 AS BANKNUM_1,
-    COALESCE(NewResults.BENEFICIAIRE, OldResults.BENEFICIAIRE)       AS BENEFICIAIRE_1,
-    COALESCE(NewResults.BO_TREASURY_ACCOUNT_ID, OldResults.BO_TREASURY_ACCOUNT_ID) AS BO_TREASURY_ACCOUNT_ID_1,
-    COALESCE(NewResults.BUSINESS_EVENT, OldResults.BUSINESS_EVENT)   AS BUSINESS_EVENT_1,
-    COALESCE(NewResults.CARVE_OUT, OldResults.CARVE_OUT)             AS CARVE_OUT_1,
-    COALESCE(NewResults.COMMENTAIRE1, OldResults.COMMENTAIRE1)       AS COMMENTAIRE1_1,
-    COALESCE(NewResults.CONDITION, OldResults.CONDITION)             AS CONDITION_1,
-    COALESCE(NewResults.CONDITION2, OldResults.CONDITION2)           AS CONDITION2_1,
-    COALESCE(NewResults.CONDITION3, OldResults.CONDITION3)           AS CONDITION3_1,
-    COALESCE(NewResults.CONTACTNAME, OldResults.CONTACTNAME)         AS CONTACTNAME_1,
-    COALESCE(NewResults.COUNTRYCODE, OldResults.COUNTRYCODE)         AS COUNTRYCODE_1,
-    COALESCE(NewResults.CURRENCY, OldResults.CURRENCY)               AS CURRENCY_1,
-    COALESCE(NewResults.CUSTODIAN_ID, OldResults.CUSTODIAN_ID)       AS CUSTODIAN_ID_1,
-    COALESCE(NewResults.DELIVERY_TYPE, OldResults.DELIVERY_TYPE)     AS DELIVERY_TYPE_1,
-    COALESCE(NewResults.DEPOSITARY, OldResults.DEPOSITARY)           AS DEPOSITARY_1,
-    COALESCE(NewResults.END_VALIDITY, OldResults.END_VALIDITY)       AS END_VALIDITY_1,
-    COALESCE(NewResults.IBKACCOUNT, OldResults.IBKACCOUNT)           AS IBKACCOUNT_1,
-    COALESCE(NewResults.INFO1, OldResults.INFO1)                     AS INFO1_1,
-    COALESCE(NewResults.INFO2, OldResults.INFO2)                     AS INFO2_1,
-    COALESCE(NewResults.INFO3, OldResults.INFO3)                     AS INFO3_1,
-    COALESCE(NewResults.INFO4, OldResults.INFO4)                     AS INFO4_1,
-    COALESCE(NewResults.INFO5, OldResults.INFO5)                     AS INFO5_1,
-    COALESCE(NewResults.INFO6, OldResults.INFO6)                     AS INFO6_1,
-    COALESCE(NewResults.INITIAL_DEPOSITORY, OldResults.INITIAL_DEPOSITORY) AS INITIAL_DEPOSITORY_1,
-    COALESCE(NewResults.LOSTRO1_CODE, OldResults.LOSTRO1_CODE)       AS LOSTRO1_CODE_1,
-    COALESCE(NewResults.LOSTRO1_CODETYPE, OldResults.LOSTRO1_CODETYPE) AS LOSTRO1_CODETYPE_1,
-    COALESCE(NewResults.MARKET, OldResults.MARKET)                   AS MARKET_1,
-    COALESCE(NewResults.PAYMENT, OldResults.PAYMENT)                 AS PAYMENT_1,
-    COALESCE(NewResults.PAYMENTMETHOD, OldResults.PAYMENTMETHOD)     AS PAYMENTMETHOD,
-    COALESCE(NewResults.PLACE_OF_SETTLEMENT, OldResults.PLACE_OF_SETTLEMENT) AS PLACE_OF_SETTLEMENT_1,
-    COALESCE(NewResults.ROUTING, OldResults.ROUTING)                 AS ROUTING_1,
-    COALESCE(NewResults.AUDIT_SEQUENCE, OldResults.AUDIT_SEQUENCE)   AS SEQUENCE_1,
-    COALESCE(NewResults.SIGN, OldResults.SIGN)                       AS SIGN_1,
-    COALESCE(NewResults.SSI_PATH_ID, OldResults.SSI_PATH_ID)         AS SSI_PATH_ID_1,
-    COALESCE(NewResults.START_VALIDITY, OldResults.START_VALIDITY)   AS START_VALIDITY_1,
-    COALESCE(NewResults.TYPE, OldResults.TYPE)                       AS TYPE_1,
-    COALESCE(NewResults.UNDERLYING_ALLOTMENT, OldResults.UNDERLYING_ALLOTMENT) AS UNDERLYING_ALLOTMENT_1,
-    COALESCE(NewResults.UNDERLYING_CURRENCY, OldResults.UNDERLYING_CURRENCY)   AS UNDERLYING_CURRENCY_1,
-    COALESCE(NewResults.UNDERLYING_MARKET, OldResults.UNDERLYING_MARKET)       AS UNDERLYING_MARKET_1,
-    COALESCE(NewResults.SETTLEMENT_METHOD, OldResults.SETTLEMENT_METHOD)       AS SETTLEMENT_METHOD_1,
-    COALESCE(NewResults.THIRD_SOPHIS_ID, OldResults.THIRD_SOPHIS_ID)           AS THIRD_SOPHIS_ID,
-    COALESCE(NewResults.THIRD_REFERENCE, OldResults.THIRD_REFERENCE)           AS THIRD_REFERENCE,
-    COALESCE(NewResults.External_Reference, OldResults.External_Reference)     AS External_Reference,
-    COALESCE(NewResults.ThirdParty_Location, OldResults.ThirdParty_Location)   AS ThirdParty_Location,
-    COALESCE(NewResults.ThirdParty_Domicile, OldResults.ThirdParty_Domicile)   AS ThirdParty_Domicile,
-    COALESCE(NewResults.Full_Address, OldResults.Full_Address)                 AS Full_Address,
-    COALESCE(NewResults.SWIFT_CODE, OldResults.SWIFT_CODE)                     AS SWIFT_CODE,
-    COALESCE(NewResults.FAX_NUMBER, OldResults.FAX_NUMBER)                     AS FAX_NUMBER,
-    COALESCE(NewResults.EMAIL, OldResults.EMAIL)                               AS EMAIL,
-    COALESCE(NewResults.account_name, OldResults.account_name)                 AS Account_name,
-    COALESCE(NewResults.USER_NAME, OldResults.USER_NAME)                       AS USER_NAME,
-    COALESCE(NewResults.Validator, OldResults.Validator)                       AS Validator,
-    COALESCE(NewResults.Validation_Date, OldResults.Validation_Date)           AS Validation_Date,
-    COALESCE(NewResults.CODE_REMETTANT, OldResults.CODE_REMETTANT)             AS CODE_REMETTANT
+r1.SOURCE_SEQUENCE AS NewSequence,
+r2.SOURCE_SEQUENCE AS OldSequence,
+r1.ID AS ID_SEQUENCE1,
+r1.TIERName AS TierName,
+r1.ACCOUNT_ROUTER AS ACCOUNT_ROUTER_1,
+r1.ACCOUNT_TYPE AS ACCOUNT_TYPE_1,
+r1.AGENT_ID AS AGENT_ID_1,
+r1.ALLOTMENT AS ALLOTMENT_1,
+r1.BANKID AS BANKID_1,
+r1.Financial_Institution,
+r1.BANKNUM AS BANKNUM_1,
+r1.BENEFICIAIRE AS BENEFICIAIRE_1,
+r1.BO_TREASURY_ACCOUNT_ID AS BO_TREASURY_ACCOUNT_ID_1,
+r1.BUSINESS_EVENT AS BUSINESS_EVENT_1,
+r1.CARVE_OUT AS CARVE_OUT_1,
+r1.COMMENTAIRE1 AS COMMENTAIRE1_1,
+r1.CONDITION AS CONDITION_1,
+r1.CONDITION2 AS CONDITION2_1,
+r1.CONDITION3 AS CONDITION3_1,
+r1.CONTACTNAME AS CONTACTNAME_1,
+r1.COUNTRYCODE AS COUNTRYCODE_1,
+r1.CURRENCY AS CURRENCY_1,
+r1.CUSTODIAN_ID AS CUSTODIAN_ID_1,
+r1.DELIVERY_TYPE AS DELIVERY_TYPE_1,
+r1.DEPOSITARY AS DEPOSITARY_1,
+r1.END_VALIDITY AS END_VALIDITY_1,
+r1.IBKACCOUNT AS IBKACCOUNT_1,
+r1.INFO1 AS INFO1_1,
+r1.INFO2 AS INFO2_1,
+r1.INFO3 AS INFO3_1,
+r1.INFO4 AS INFO4_1,
+r1.INFO5 AS INFO5_1,
+r1.INFO6 AS INFO6_1,
+r1.INITIAL_DEPOSITORY AS INITIAL_DEPOSITORY_1,
+r1.LOSTRO1_CODE AS LOSTRO1_CODE_1,
+r1.LOSTRO1_CODETYPE AS LOSTRO1_CODETYPE_1,
+r1.MARKET AS MARKET_1,
+r1.PAYMENT AS PAYMENT_1,
+r1.PAYMENTMETHOD AS PAYMENTMETHOD,
+r1.PLACE_OF_SETTLEMENT AS PLACE_OF_SETTLEMENT_1,
+r1.ROUTING AS ROUTING_1,
+r1.SEQUENCE AS SEQUENCE_1,
+r1.SIGN AS SIGN_1,
+r1.SSI_PATH_ID AS SSI_PATH_ID_1,
+r1.START_VALIDITY AS START_VALIDITY_1,
+r1.TYPE AS TYPE_1,
+r1.UNDERLYING_ALLOTMENT AS UNDERLYING_ALLOTMENT_1,
+r1.UNDERLYING_CURRENCY AS UNDERLYING_CURRENCY_1,
+r1.UNDERLYING_MARKET AS UNDERLYING_MARKET_1,
+r1.SETTLEMENT_METHOD AS SETTLEMENT_METHOD_1,
+r1.THIRD_SOPHIS_ID,
+r1.THIRD_REFERENCE,
+r1.External_Reference,
+r1.ThirdParty_Location,
+r1.ThirdParty_Domicile,
+r1.Full_Address,
+r1.SWIFT_CODE,
+r1.FAX_NUMBER,
+r1.EMAIL,
+r1.account_name AS Account_name,
+r1.USER_NAME,
+r1.Validator,
+r1.Validation_Date,
+r1.CODE_REMETTANT
 FROM 
-    NewResults
+SettlementResults r1
 FULL OUTER JOIN 
-    OldResults
-      ON NewResults.ID = OldResults.ID
+SettlementResults r2 ON r1.ID = r2.ID AND r1.SOURCE_SEQUENCE <> r2.SOURCE_SEQUENCE
 WHERE 
-      NewResults.ID IS NULL 
-   OR OldResults.ID IS NULL
-   OR NewResults.ACCOUNT_ROUTER      <> OldResults.ACCOUNT_ROUTER
-   OR NewResults.ACCOUNT_TYPE        <> OldResults.ACCOUNT_TYPE
-   OR NewResults.AGENT_ID            <> OldResults.AGENT_ID
-   OR NewResults.ALLOTMENT           <> OldResults.ALLOTMENT
-   OR NewResults.BANKID              <> OldResults.BANKID
-   OR NewResults.BANKNUM             <> OldResults.BANKNUM
-   OR NewResults.BENEFICIAIRE        <> OldResults.BENEFICIAIRE
-   OR NewResults.BO_TREASURY_ACCOUNT_ID <> OldResults.BO_TREASURY_ACCOUNT_ID
-   OR NewResults.BUSINESS_EVENT      <> OldResults.BUSINESS_EVENT
-   OR NewResults.CARVE_OUT           <> OldResults.CARVE_OUT
-   OR NewResults.COMMENTAIRE1        <> OldResults.COMMENTAIRE1
-   OR NewResults.CONDITION           <> OldResults.CONDITION
-   OR NewResults.CONDITION2          <> OldResults.CONDITION2
-   OR NewResults.CONDITION3          <> OldResults.CONDITION3
-   OR NewResults.CONTACTNAME         <> OldResults.CONTACTNAME
-   OR NewResults.COUNTRYCODE         <> OldResults.COUNTRYCODE
-   OR NewResults.CURRENCY            <> OldResults.CURRENCY
-   OR NewResults.CUSTODIAN_ID        <> OldResults.CUSTODIAN_ID
-   OR NewResults.DELIVERY_TYPE       <> OldResults.DELIVERY_TYPE
-   OR NewResults.DEPOSITARY          <> OldResults.DEPOSITARY
-   OR NewResults.END_VALIDITY        <> OldResults.END_VALIDITY
-   OR NewResults.IBKACCOUNT          <> OldResults.IBKACCOUNT
-   OR NewResults.INFO1               <> OldResults.INFO1
-   OR NewResults.INFO2               <> OldResults.INFO2
-   OR NewResults.INFO3               <> OldResults.INFO3
-   OR NewResults.INFO4               <> OldResults.INFO4
-   OR NewResults.INFO5               <> OldResults.INFO5
-   OR NewResults.INFO6               <> OldResults.INFO6
-   OR NewResults.INITIAL_DEPOSITORY  <> OldResults.INITIAL_DEPOSITORY
-   OR NewResults.LOSTRO1_CODE        <> OldResults.LOSTRO1_CODE
-   OR NewResults.LOSTRO1_CODETYPE    <> OldResults.LOSTRO1_CODETYPE
-   OR NewResults.MARKET              <> OldResults.MARKET
-   OR NewResults.PAYMENT             <> OldResults.PAYMENT
-   OR NewResults.PLACE_OF_SETTLEMENT <> OldResults.PLACE_OF_SETTLEMENT
-   OR NewResults.ROUTING             <> OldResults.ROUTING
-   OR NewResults.AUDIT_SEQUENCE      <> OldResults.AUDIT_SEQUENCE
-   OR NewResults.SIGN                <> OldResults.SIGN
-   OR NewResults.SSI_PATH_ID         <> OldResults.SSI_PATH_ID
-   OR NewResults.START_VALIDITY      <> OldResults.START_VALIDITY
-   OR NewResults.TYPE                <> OldResults.TYPE
-   OR NewResults.External_Reference  <> OldResults.External_Reference
-   OR NewResults.ThirdParty_Location <> OldResults.ThirdParty_Location
-   OR NewResults.ThirdParty_Domicile <> OldResults.ThirdParty_Domicile
-   OR NewResults.Full_Address        <> OldResults.Full_Address
-   OR NewResults.SWIFT_CODE          <> OldResults.SWIFT_CODE
-   OR NewResults.FAX_NUMBER          <> OldResults.FAX_NUMBER
-   OR NewResults.EMAIL               <> OldResults.EMAIL
-   OR NewResults.UNDERLYING_ALLOTMENT <> OldResults.UNDERLYING_ALLOTMENT
-   OR NewResults.UNDERLYING_CURRENCY <> OldResults.UNDERLYING_CURRENCY
-   OR NewResults.UNDERLYING_MARKET   <> OldResults.UNDERLYING_MARKET
-   OR NewResults.SETTLEMENT_METHOD   <> OldResults.SETTLEMENT_METHOD;
+r1.ID IS NULL OR r2.ID IS NULL OR 
+r1.ACCOUNT_ROUTER <> r2.ACCOUNT_ROUTER OR
+r1.ACCOUNT_TYPE <> r2.ACCOUNT_TYPE OR
+r1.AGENT_ID <> r2.AGENT_ID OR
+r1.ALLOTMENT <> r2.ALLOTMENT OR
+r1.BANKID <> r2.BANKID OR
+r1.BANKNUM <> r2.BANKNUM OR
+r1.BENEFICIAIRE <> r2.BENEFICIAIRE OR
+r1.BO_TREASURY_ACCOUNT_ID <> r2.BO_TREASURY_ACCOUNT_ID OR
+r1.BUSINESS_EVENT <> r2.BUSINESS_EVENT OR
+r1.CARVE_OUT <> r2.CARVE_OUT OR
+r1.COMMENTAIRE1 <> r2.COMMENTAIRE1 OR
+r1.CONDITION <> r2.CONDITION OR
+r1.CONDITION2 <> r2.CONDITION2 OR
+r1.CONDITION3 <> r2.CONDITION3 OR
+r1.CONTACTNAME <> r2.CONTACTNAME OR
+r1.COUNTRYCODE <> r2.COUNTRYCODE OR
+r1.CURRENCY <> r2.CURRENCY OR
+r1.CUSTODIAN_ID <> r2.CUSTODIAN_ID OR
+r1.DELIVERY_TYPE <> r2.DELIVERY_TYPE OR
+r1.DEPOSITARY <> r2.DEPOSITARY OR
+r1.END_VALIDITY <> r2.END_VALIDITY OR
+r1.IBKACCOUNT <> r2.IBKACCOUNT OR
+r1.INFO1 <> r2.INFO1 OR
+r1.INFO2 <> r2.INFO2 OR
+r1.INFO3 <> r2.INFO3 OR
+r1.INFO4 <> r2.INFO4 OR
+r1.INFO5 <> r2.INFO5 OR
+r1.INFO6 <> r2.INFO6 OR
+r1.INITIAL_DEPOSITORY <> r2.INITIAL_DEPOSITORY OR
+r1.LOSTRO1_CODE <> r2.LOSTRO1_CODE OR
+r1.LOSTRO1_CODETYPE <> r2.LOSTRO1_CODETYPE OR
+r1.MARKET <> r2.MARKET OR
+r1.PAYMENT <> r2.PAYMENT OR
+r1.PLACE_OF_SETTLEMENT <> r2.PLACE_OF_SETTLEMENT OR
+r1.ROUTING <> r2.ROUTING OR
+r1.SEQUENCE <> r2.SEQUENCE OR
+r1.SIGN <> r2.SIGN OR
+r1.SSI_PATH_ID <> r2.SSI_PATH_ID OR
+r1.START_VALIDITY <> r2.START_VALIDITY OR
+r1.TYPE <> r2.TYPE OR
+r1.External_Reference <> r2.External_Reference OR
+r1.ThirdParty_Location <> r2.ThirdParty_Location OR
+r1.ThirdParty_Domicile <> r2.ThirdParty_Domicile OR
+r1.Full_Address <> r2.Full_Address OR
+r1.SWIFT_CODE <> r2.SWIFT_CODE OR
+r1.FAX_NUMBER <> r2.FAX_NUMBER OR
+r1.EMAIL <> r2.EMAIL OR
+r1.UNDERLYING_ALLOTMENT <> r2.UNDERLYING_ALLOTMENT OR
+r1.UNDERLYING_CURRENCY <> r2.UNDERLYING_CURRENCY OR
+r1.UNDERLYING_MARKET <> r2.UNDERLYING_MARKET OR
+r1.SETTLEMENT_METHOD <> r2.SETTLEMENT_METHOD;
