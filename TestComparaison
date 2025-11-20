@@ -25,10 +25,11 @@ WITH ChangeInfo AS (
     AND ats.start_validity < DATE '2099-12-31'
 ), 
 
--- 1) tes résultats bruts, inchangés
+-- 1) résultats bruts (on ajoute NUMERO pour savoir quelle est la dernière version)
 SettlementResultsRaw AS (
 SELECT 
 	ats.ID,
+    ats.NUMERO,
 	ats.ACCOUNT_ROUTER,
 	decode(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
 	ats.AGENT_ID,
@@ -112,7 +113,7 @@ WHERE
 	ats.CODE in (:AuditTierSequence, :PreviousAuditTierSequence)
 ),
 
--- 2) déduplication : 1 seule ligne par (ID, SOURCE_SEQUENCE)
+-- 2) on ne garde que la DERNIÈRE version de la SSI par (ID, SOURCE_SEQUENCE)
 SettlementResults AS (
     SELECT *
     FROM (
@@ -120,14 +121,14 @@ SettlementResults AS (
             sr.*,
             ROW_NUMBER() OVER (
                 PARTITION BY sr.ID, sr.SOURCE_SEQUENCE
-                ORDER BY sr.START_VALIDITY DESC
+                ORDER BY sr.START_VALIDITY DESC, sr.NUMERO DESC
             ) AS rn
         FROM SettlementResultsRaw sr
     )
     WHERE rn = 1
 )
 
--- 3) ta requête finale, inchangée mais sur SettlementResults dédupliqué
+-- 3) ta requête finale, identique mais sur SettlementResults dédupliqué
 SELECT 
 r1.SOURCE_SEQUENCE AS NewSequence,
 r2.SOURCE_SEQUENCE AS OldSequence,
