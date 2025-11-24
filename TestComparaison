@@ -1,82 +1,271 @@
-public async Task<List<SettlementRecordComparison>> ProcessSSI(DateTime startDate, DateTime endDate)
-{
-    var auditTiers = await _dBContext.GetRecentAuditTiers(startDate, endDate);
-    var allComparisons = new List<SettlementRecordComparison>();
+WITH ChangeInfo AS (
+  SELECT
+      ats.code,
+      ats.sequence,
+      ru.name       AS changer_name,
+      atc.datemodif AS change_date
+  FROM (
+    SELECT
+        code,
+        sequence,
+        numero,
+        TRUNC(start_validity) AS start_validity,
+        LAG(TRUNC(start_validity)) OVER (
+          PARTITION BY code
+          ORDER BY numero
+        ) AS prev_start
+    FROM audit_tierssettlement
+    WHERE code IN (:AuditTierSequence, :PreviousAuditTierSequence)
+  ) ats
+  JOIN AUDIT_TIERS_COMPO atc
+    ON atc.sequence = ats.code
+  LEFT JOIN riskusers ru
+    ON ru.ident = atc.id
+  WHERE ats.prev_start   = DATE '2099-12-31'
+    AND ats.start_validity < DATE '2099-12-31'
+), 
+SettlementResults AS (
+SELECT 
+	ats.ID,
+	ats.ACCOUNT_ROUTER,
+	decode(ats.ACCOUNT_TYPE,1,'Both',2,'Cash',3,'Instrument',ats.ACCOUNT_TYPE) ACCOUNT_TYPE,
+	ats.AGENT_ID,
+    DECODE(ats.ALLOTMENT, -1, '*', A.LIBELLE) ALLOTMENT,
+	ats.BANKID,
+    decode(ats.BANKID,-1,'*', (select name from tiers where ident in(ats.BANKID)) ) AS Financial_Institution,
+	ats.BANKNUM,
+	ats.BENEFICIAIRE,
+	ats.BO_TREASURY_ACCOUNT_ID,
+    DECODE(ats.BUSINESS_EVENT, -1, '*') BUSINESS_EVENT,
+	ats.CARVE_OUT,
+    ats.CODE,
+	ats.COMMENTAIRE1,
+	ats.CONDITION,
+	ats.CONDITION2,
+	ats.CONDITION3,
+	ats.CONTACTNAME,
+	ats.COUNTRYCODE,
+	DECODE(ats.CURRENCY, -1, '*', DEVISE_TO_STR(ats.CURRENCY)) CURRENCY,
+	ats.CUSTODIAN_ID,
+    DECODE(ats.DELIVERY_TYPE, -1, '*', 1, 'DVP', 2, 'FOP', 3, 'N/A') DELIVERY_TYPE,
+    DECODE(ats.DEPOSITARY, -1, '*', DP.NAME) DEPOSITARY,
+	ats.END_VALIDITY,
+	ats.IBKACCOUNT,
+	ats.INFO1,
+	ats.INFO2,
+	ats.INFO3,
+	ats.INFO4,
+	ats.INFO5,
+	ats.INFO6,
+	ats.INITIAL_DEPOSITORY,
+	ats.LOSTRO1_CODE,
+	ats.LOSTRO1_CODETYPE,
+	decode(ats.MARKET, -1,'*', NUM_TO_STR(ats.MARKET)  || ' - ' || (select libelle from marche where mnemomarche in (ats.MARKET) )) AS MARKET,
+	ats.PAYMENT,
+    DECODE(ats.PAYMENT, -1, '*', PM.LIBELLE) PAYMENTMETHOD,
+    PS.NAME AS PLACE_OF_SETTLEMENT,
+	ats.ROUTING,
+	ats.SEQUENCE,
+	decode(ats.SIGN,1,'(+)',2,'(0)',3,'(-)','(*)') AS Sign,
+	ats.SSI_PATH_ID,
+	ats.START_VALIDITY,
+	decode(ats.TYPE,1,'*',2,'Counterparty',3,'Broker',4,'Depositary',5,'Entity',6,'Counterparty 2',ats.TYPE) AS TYPE,
+	decode(ats.UNDERLYING_ALLOTMENT , -1,'*',(select libelle from affectation where ident = ats.UNDERLYING_ALLOTMENT )) AS UNDERLYING_ALLOTMENT,
+	decode(ats.UNDERLYING_CURRENCY, -1, '*', DEVISE_TO_STR(ats.UNDERLYING_CURRENCY)) AS UNDERLYING_CURRENCY,
+	decode(ats.UNDERLYING_MARKET, -1,'*', NUM_TO_STR(ats.UNDERLYING_MARKET)   || ' - ' || (select libelle from marche where mnemomarche in (ats.UNDERLYING_MARKET) )) AS UNDERLYING_MARKET,
+	DECODE(ats.WORKFLOW_ID, -1, 'N/A', BCW.NAME) SETTLEMENT_METHOD,
+	ats.CODE AS SOURCE_SEQUENCE,
+    tr.ident AS THIRD_SOPHIS_ID,
+    tr.reference AS THIRD_REFERENCE,
+    tr.EXTERNREF AS External_Reference,
+    tr.location AS ThirdParty_Location,
+    tr.domicile AS ThirdParty_Domicile,
+    TRIM(COALESCE(tg.ADDRESS1, '') || ' ' ||
+         COALESCE(tg.ADDRESS2, '') || ' ' ||
+         COALESCE(tg.ADDRESS3, '') || ' ' ||
+         COALESCE(tg.ADDRESS4, '') || ' ' ||
+         COALESCE(tg.ADDRESS5, '')) AS Full_Address,
+    tg.swift AS SWIFT_CODE,
+    tg.fax AS FAX_NUMBER,
+    tg.email AS EMAIL,
+    tr.NAME TIERName,
+    bsp.account_name,
 
-    foreach (var auditTier in auditTiers)
-    {
-        var settlementResults = await _dBContext.GetSettlementResults(
-            auditTier.AuditTierSequence,
-            auditTier.PreviousAuditTierSequence);
+    -- 🔹 USER_NAME : toujours le user de la séquence
+    rsk.name AS USER_NAME,
 
-        var comparisons = _settlementComparisonService.CompareRecords(settlementResults.ToList(), auditTier);
-        allComparisons.AddRange(comparisons);
-    }
+    -- 🔹 Validator + Validation_Date : seulement si ChangeInfo trouve quelque chose
+    CASE 
+        WHEN ci.changer_name IS NOT NULL THEN ci.changer_name
+        ELSE NULL
+    END AS Validator,
+    CASE 
+        WHEN ci.changer_name IS NOT NULL THEN ci.change_date
+        ELSE NULL
+    END AS Validation_Date,
 
-    return allComparisons;
-}
+    'SOPHIS' AS CODE_REMETTANT
+FROM AUDIT_TIERSSETTLEMENT ats
+LEFT JOIN AUDIT_TIERS_COMPO atc ON ats.code = atc.SEQUENCE 
+LEFT JOIN BO_CASH_WORKFLOW BCW ON BCW.ID = ats.WORKFLOW_ID
+LEFT JOIN TIERS tr ON tr.ident = atc.code
+LEFT JOIN TIERS DP ON DP.IDENT = ats.DEPOSITARY
+LEFT JOIN TIERS PS ON PS.IDENT = ats.PLACE_OF_SETTLEMENT
+LEFT JOIN TIERSGENERAL tg ON tg.CODE = tr.ident
+LEFT JOIN AFFECTATION A ON A.IDENT = ats.ALLOTMENT
+LEFT JOIN PAYMENTMETHOD PM ON PM.IDENT = ats.PAYMENT
+LEFT JOIN RISKUSERS rsk ON rsk.ident = atc.ID
+LEFT JOIN BO_SSI_PATH bsp ON bsp.ssi_path_id = ats.ssi_path_id
+LEFT JOIN ChangeInfo ci ON ci.code = ats.code AND ci.sequence = ats.sequence
+WHERE  
+	ats.CODE in (:AuditTierSequence, :PreviousAuditTierSequence)
+),
 
+-- 🔹 On sépare clairement les 2 séquences
+NewResults AS (
+    SELECT * 
+    FROM SettlementResults 
+    WHERE SOURCE_SEQUENCE = :AuditTierSequence
+),
+OldResults AS (
+    SELECT * 
+    FROM SettlementResults 
+    WHERE SOURCE_SEQUENCE = :PreviousAuditTierSequence
+)
 
-using System.Globalization;
+SELECT 
+    n.SOURCE_SEQUENCE AS NewSequence,
+    o.SOURCE_SEQUENCE AS OldSequence,
+    COALESCE(n.ID, o.ID) AS ID_SEQUENCE1,
+    COALESCE(n.TIERName, o.TIERName) AS TierName,
 
-private static DateTime? ParseDate(string? value)
-{
-    if (string.IsNullOrWhiteSpace(value))
-        return null;
+    COALESCE(n.ACCOUNT_ROUTER, o.ACCOUNT_ROUTER) AS ACCOUNT_ROUTER_1,
+    COALESCE(n.ACCOUNT_TYPE,  o.ACCOUNT_TYPE)  AS ACCOUNT_TYPE_1,
+    COALESCE(n.AGENT_ID,      o.AGENT_ID)      AS AGENT_ID_1,
+    COALESCE(n.ALLOTMENT,     o.ALLOTMENT)     AS ALLOTMENT_1,
+    COALESCE(n.BANKID,        o.BANKID)        AS BANKID_1,
+    COALESCE(n.Financial_Institution, o.Financial_Institution) AS Financial_Institution,
+    COALESCE(n.BANKNUM,       o.BANKNUM)       AS BANKNUM_1,
+    COALESCE(n.BENEFICIAIRE,  o.BENEFICIAIRE)  AS BENEFICIAIRE_1,
+    COALESCE(n.BO_TREASURY_ACCOUNT_ID, o.BO_TREASURY_ACCOUNT_ID) AS BO_TREASURY_ACCOUNT_ID_1,
+    COALESCE(n.BUSINESS_EVENT, o.BUSINESS_EVENT) AS BUSINESS_EVENT_1,
+    COALESCE(n.CARVE_OUT,      o.CARVE_OUT)      AS CARVE_OUT_1,
+    COALESCE(n.COMMENTAIRE1,   o.COMMENTAIRE1)   AS COMMENTAIRE1_1,
+    COALESCE(n.CONDITION,      o.CONDITION)      AS CONDITION_1,
+    COALESCE(n.CONDITION2,     o.CONDITION2)     AS CONDITION2_1,
+    COALESCE(n.CONDITION3,     o.CONDITION3)     AS CONDITION3_1,
+    COALESCE(n.CONTACTNAME,    o.CONTACTNAME)    AS CONTACTNAME_1,
+    COALESCE(n.COUNTRYCODE,    o.COUNTRYCODE)    AS COUNTRYCODE_1,
+    COALESCE(n.CURRENCY,       o.CURRENCY)       AS CURRENCY_1,
+    COALESCE(n.CUSTODIAN_ID,   o.CUSTODIAN_ID)   AS CUSTODIAN_ID_1,
+    COALESCE(n.DELIVERY_TYPE,  o.DELIVERY_TYPE)  AS DELIVERY_TYPE_1,
+    COALESCE(n.DEPOSITARY,     o.DEPOSITARY)     AS DEPOSITARY_1,
+    COALESCE(n.END_VALIDITY,   o.END_VALIDITY)   AS END_VALIDITY_1,
+    COALESCE(n.IBKACCOUNT,     o.IBKACCOUNT)     AS IBKACCOUNT_1,
+    COALESCE(n.INFO1,          o.INFO1)          AS INFO1_1,
+    COALESCE(n.INFO2,          o.INFO2)          AS INFO2_1,
+    COALESCE(n.INFO3,          o.INFO3)          AS INFO3_1,
+    COALESCE(n.INFO4,          o.INFO4)          AS INFO4_1,
+    COALESCE(n.INFO5,          o.INFO5)          AS INFO5_1,
+    COALESCE(n.INFO6,          o.INFO6)          AS INFO6_1,
+    COALESCE(n.INITIAL_DEPOSITORY, o.INITIAL_DEPOSITORY) AS INITIAL_DEPOSITORY_1,
+    COALESCE(n.LOSTRO1_CODE,      o.LOSTRO1_CODE)      AS LOSTRO1_CODE_1,
+    COALESCE(n.LOSTRO1_CODETYPE,  o.LOSTRO1_CODETYPE)  AS LOSTRO1_CODETYPE_1,
+    COALESCE(n.MARKET,            o.MARKET)            AS MARKET_1,
+    COALESCE(n.PAYMENT,           o.PAYMENT)           AS PAYMENT_1,
+    COALESCE(n.PAYMENTMETHOD,     o.PAYMENTMETHOD)     AS PAYMENTMETHOD,
+    COALESCE(n.PLACE_OF_SETTLEMENT, o.PLACE_OF_SETTLEMENT) AS PLACE_OF_SETTLEMENT_1,
+    COALESCE(n.ROUTING,           o.ROUTING)           AS ROUTING_1,
+    COALESCE(n.SEQUENCE,          o.SEQUENCE)          AS SEQUENCE_1,
+    COALESCE(n.SIGN,              o.SIGN)              AS SIGN_1,
+    COALESCE(n.SSI_PATH_ID,       o.SSI_PATH_ID)       AS SSI_PATH_ID_1,
+    COALESCE(n.START_VALIDITY,    o.START_VALIDITY)    AS START_VALIDITY_1,
+    COALESCE(n.TYPE,              o.TYPE)              AS TYPE_1,
+    COALESCE(n.UNDERLYING_ALLOTMENT, o.UNDERLYING_ALLOTMENT) AS UNDERLYING_ALLOTMENT_1,
+    COALESCE(n.UNDERLYING_CURRENCY,  o.UNDERLYING_CURRENCY)  AS UNDERLYING_CURRENCY_1,
+    COALESCE(n.UNDERLYING_MARKET,    o.UNDERLYING_MARKET)    AS UNDERLYING_MARKET_1,
+    COALESCE(n.SETTLEMENT_METHOD,    o.SETTLEMENT_METHOD)    AS SETTLEMENT_METHOD_1,
+    COALESCE(n.THIRD_SOPHIS_ID,      o.THIRD_SOPHIS_ID)      AS THIRD_SOPHIS_ID,
+    COALESCE(n.THIRD_REFERENCE,      o.THIRD_REFERENCE)      AS THIRD_REFERENCE,
+    COALESCE(n.External_Reference,   o.External_Reference)   AS External_Reference,
+    COALESCE(n.ThirdParty_Location,  o.ThirdParty_Location)  AS ThirdParty_Location,
+    COALESCE(n.ThirdParty_Domicile,  o.ThirdParty_Domicile)  AS ThirdParty_Domicile,
+    COALESCE(n.Full_Address,         o.Full_Address)         AS Full_Address,
+    COALESCE(n.SWIFT_CODE,           o.SWIFT_CODE)           AS SWIFT_CODE,
+    COALESCE(n.FAX_NUMBER,           o.FAX_NUMBER)           AS FAX_NUMBER,
+    COALESCE(n.EMAIL,                o.EMAIL)                AS EMAIL,
+    COALESCE(n.account_name,         o.account_name)         AS Account_name,
 
-    // adapte le format si besoin (culture FR, etc.)
-    if (DateTime.TryParse(value, CultureInfo.InvariantCulture,
-                          DateTimeStyles.None, out var dt))
-    {
-        return dt;
-    }
+    -- 🔹 USER_NAME : on prend celui de la nouvelle séquence si possible
+    COALESCE(n.USER_NAME, o.USER_NAME) AS USER_NAME,
 
-    return null;
-}
+    -- 🔹 Validator + Validation_Date : seulement si non NULL
+    COALESCE(n.Validator, o.Validator) AS Validator,
+    CASE 
+        WHEN COALESCE(n.Validator, o.Validator) IS NOT NULL
+        THEN COALESCE(n.Validation_Date, o.Validation_Date)
+        ELSE NULL
+    END AS Validation_Date,
 
-private static IEnumerable<SettlementRecord> SimplifyRecords(IEnumerable<SettlementRecord> records)
-{
-    // But : pour chaque (NewSequence, OldSequence, IdSequence)
-    // on garde UNE seule ligne : la plus "récente"
-    // (StartValidity la plus récente, puis Validation_Date la plus récente)
+    COALESCE(n.CODE_REMETTANT, o.CODE_REMETTANT) AS CODE_REMETTANT
 
-    return records
-        .GroupBy(r => new
-        {
-            r.NewSequence,
-            r.OldSequence,
-            r.IdSequence
-        })
-        .Select(g =>
-        {
-            return g
-                .OrderByDescending(r => ParseDate(r.StartValidity) ?? DateTime.MinValue)
-                .ThenByDescending(r => ParseDate(r.Validation_Date) ?? DateTime.MinValue)
-                .First();
-        });
-}
-
-
-public async Task<List<SettlementRecordComparison>> ProcessSSI(DateTime startDate, DateTime endDate)
-{
-    var auditTiers = await _dBContext.GetRecentAuditTiers(startDate, endDate);
-    var allComparisons = new List<SettlementRecordComparison>();
-
-    foreach (var auditTier in auditTiers)
-    {
-        var settlementResults = await _dBContext.GetSettlementResults(
-            auditTier.AuditTierSequence,
-            auditTier.PreviousAuditTierSequence);
-
-        // 🔽 étape de nettoyage
-        var simplifiedResults = SimplifyRecords(settlementResults).ToList();
-
-        var comparisons = _settlementComparisonService.CompareRecords(simplifiedResults, auditTier);
-        allComparisons.AddRange(comparisons);
-    }
-
-    return allComparisons;
-}
-
-
+FROM 
+    NewResults n
+FULL OUTER JOIN 
+    OldResults o 
+      ON n.ID = o.ID
+WHERE 
+      n.ID IS NULL 
+   OR o.ID IS NULL
+   OR n.ACCOUNT_ROUTER <> o.ACCOUNT_ROUTER
+   OR n.ACCOUNT_TYPE   <> o.ACCOUNT_TYPE
+   OR n.AGENT_ID       <> o.AGENT_ID
+   OR n.ALLOTMENT      <> o.ALLOTMENT
+   OR n.BANKID         <> o.BANKID
+   OR n.BANKNUM        <> o.BANKNUM
+   OR n.BENEFICIAIRE   <> o.BENEFICIAIRE
+   OR n.BO_TREASURY_ACCOUNT_ID <> o.BO_TREASURY_ACCOUNT_ID
+   OR n.BUSINESS_EVENT <> o.BUSINESS_EVENT
+   OR n.CARVE_OUT      <> o.CARVE_OUT
+   OR n.COMMENTAIRE1   <> o.COMMENTAIRE1
+   OR n.CONDITION      <> o.CONDITION
+   OR n.CONDITION2     <> o.CONDITION2
+   OR n.CONDITION3     <> o.CONDITION3
+   OR n.CONTACTNAME    <> o.CONTACTNAME
+   OR n.COUNTRYCODE    <> o.COUNTRYCODE
+   OR n.CURRENCY       <> o.CURRENCY
+   OR n.CUSTODIAN_ID   <> o.CUSTODIAN_ID
+   OR n.DELIVERY_TYPE  <> o.DELIVERY_TYPE
+   OR n.DEPOSITARY     <> o.DEPOSITARY
+   OR n.END_VALIDITY   <> o.END_VALIDITY
+   OR n.IBKACCOUNT     <> o.IBKACCOUNT
+   OR n.INFO1          <> o.INFO1
+   OR n.INFO2          <> o.INFO2
+   OR n.INFO3          <> o.INFO3
+   OR n.INFO4          <> o.INFO4
+   OR n.INFO5          <> o.INFO5
+   OR n.INFO6          <> o.INFO6
+   OR n.INITIAL_DEPOSITORY <> o.INITIAL_DEPOSITORY
+   OR n.LOSTRO1_CODE      <> o.LOSTRO1_CODE
+   OR n.LOSTRO1_CODETYPE  <> o.LOSTRO1_CODETYPE
+   OR n.MARKET            <> o.MARKET
+   OR n.PAYMENT           <> o.PAYMENT
+   OR n.PLACE_OF_SETTLEMENT <> o.PLACE_OF_SETTLEMENT
+   OR n.ROUTING           <> o.ROUTING
+   OR n.SEQUENCE          <> o.SEQUENCE
+   OR n.SIGN              <> o.SIGN
+   OR n.SSI_PATH_ID       <> o.SSI_PATH_ID
+   OR n.START_VALIDITY    <> o.START_VALIDITY
+   OR n.TYPE              <> o.TYPE
+   OR n.External_Reference  <> o.External_Reference
+   OR n.ThirdParty_Location <> o.ThirdParty_Location
+   OR n.ThirdParty_Domicile <> o.ThirdParty_Domicile
+   OR n.Full_Address        <> o.Full_Address
+   OR n.SWIFT_CODE          <> o.SWIFT_CODE
+   OR n.FAX_NUMBER          <> o.FAX_NUMBER
+   OR n.EMAIL               <> o.EMAIL
+   OR n.UNDERLYING_ALLOTMENT <> o.UNDERLYING_ALLOTMENT
+   OR n.UNDERLYING_CURRENCY <> o.UNDERLYING_CURRENCY
+   OR n.UNDERLYING_MARKET   <> o.UNDERLYING_MARKET
+   OR n.SETTLEMENT_METHOD   <> o.SETTLEMENT_METHOD;
 
