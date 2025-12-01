@@ -1,3 +1,7 @@
+https://github.com/rcallaby/CSharp-Interview-Questions?tab=readme-ov-file
+https://github.com/kansiris/C-Sharp-c-interview-question?utm_source=chatgpt.com
+
+
 CREATE OR REPLACE FUNCTION IsFixingClausesConsistent(sicovamValue IN NUMBER)
 RETURN VARCHAR2 IS
   g_has_date_ko        BOOLEAN := FALSE;
