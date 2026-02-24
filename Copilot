@@ -1,0 +1,116 @@
+You are building a complete, compiling, runnable WPF application using .NET 8 (SDK-style), C#, Visual Studio 2022.
+Create the full solution structure, code files, and XAML for an app named "BatchLauncher".
+
+GOALS
+- A WPF launcher with tabs and tile buttons to execute batch files/commands quickly.
+- Tabs are categories. Each tab contains tiles. Each tile has icon + label.
+- A "+" tile exists on every tab to add a new shortcut.
+- Persist everything to JSON in %AppData%\BatchLauncher\config.json
+- MVVM architecture (no heavy frameworks; implement minimal MVVM: ObservableObject, RelayCommand).
+- Must compile and run immediately after generation.
+
+TARGET
+- .NET 8, Windows, WPF. Use SDK-style csproj.
+- Use System.Text.Json for serialization.
+- Use Microsoft.Win32 dialogs (OpenFileDialog) for browsing batch files and icons.
+- All code should be in one WPF project within the solution (no extra projects).
+
+FEATURES (REQUIRED)
+1) Main UI
+- Window with:
+  - TabControl bound to Tabs collection.
+  - Each Tab shows tiles in a WrapPanel layout (uniform tile size).
+  - Each tile shows:
+    - Icon (Image) if IconPath set; else show a default embedded icon (pack URI).
+    - Name text.
+- Toolbar on top with buttons:
+  - Add Tab
+  - Rename Tab
+  - Remove Tab
+  - Export Config
+  - Import Config
+- On startup: load config. If none exists, create default config with one tab "Launch Trading Suite" and one example shortcut (placeholder) plus the "+" tile.
+
+2) Add/Edit Shortcut
+- Clicking "+" tile opens Add/Edit dialog (Window) with fields:
+  - Name (required)
+  - Command Type (dropdown): BatchFile (.bat/.cmd), Executable (.exe), PowerShell (.ps1)
+  - File Path (required; browse button)
+  - Arguments (optional)
+  - Working Directory (optional; browse folder button)
+  - Icon Path (optional; browse for .png/.ico)
+  - Start Mode (dropdown): Normal, HiddenConsole
+- Dialog validates input and shows inline validation errors.
+- Save adds new tile to current tab and persists to JSON.
+- Right-click on any existing tile: context menu with Edit, Remove, Duplicate.
+- Double-click tile runs the command.
+
+3) Command Execution
+- Use ProcessStartInfo safely.
+- For BatchFile: run via cmd.exe /c with correct quoting.
+- For PowerShell: run via powershell.exe -ExecutionPolicy Bypass -File with correct quoting.
+- For Executable: run directly.
+- Respect WorkingDirectory if set.
+- If Start Mode = HiddenConsole, set CreateNoWindow=true and WindowStyle=Hidden (as applicable).
+- Error handling: show MessageBox with exception + friendly text if launch fails.
+
+4) Tabs management
+- Add Tab: prompts for tab name and adds new tab.
+- Rename Tab: prompts and renames selected tab.
+- Remove Tab: confirm, cannot remove last remaining tab.
+- Tabs reorder: add Up/Down buttons or drag & drop if simple; if drag & drop too complex, implement Up/Down buttons and persist order.
+
+5) Persistence & Config
+- Config models:
+  - AppConfig { List<TabConfig> Tabs; int SelectedTabIndex; }
+  - TabConfig { string Name; List<ShortcutConfig> Shortcuts; }
+  - ShortcutConfig {
+      Guid Id;
+      string Name;
+      CommandType Type;
+      string FilePath;
+      string Arguments;
+      string WorkingDirectory;
+      string IconPath;
+      StartMode StartMode;
+    }
+- Save config on any change (debounce optional; if not, just save immediately).
+- Use %AppData%\BatchLauncher\config.json
+- Export/Import:
+  - Export writes config JSON to user-chosen path.
+  - Import reads config JSON from chosen path, validates, replaces current config, saves to AppData, reloads UI.
+
+6) Startup convenience
+- Add a Settings menu option "Run on Windows startup" with a checkbox.
+- Implement startup toggle using HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+- When enabled, add a registry value "BatchLauncher" pointing to the app exe path.
+- When disabled, remove it.
+
+IMPLEMENTATION DETAILS
+- Use MVVM:
+  - MainWindow.xaml + MainWindowViewModel
+  - AddEditShortcutWindow.xaml + AddEditShortcutViewModel
+  - Simple dialogs for text input (InputDialog.xaml) for tab add/rename
+- Use data binding and commands, not code-behind, except minimal window wiring.
+- Provide a Tile control via DataTemplate.
+- Include default icon as an embedded Resource: Assets/default.png (generate or reference a simple placeholder).
+- Use INotifyPropertyChanged base class.
+- RelayCommand supports CanExecute and CommandParameter.
+- Ensure null-safe, defensive code for missing files and invalid config.
+
+DELIVERABLES
+- Provide:
+  - Full file tree list
+  - All .cs and .xaml contents
+  - csproj
+  - App.xaml, App.xaml.cs
+  - A brief "How to run" section with exact steps in Visual Studio 2022
+- Ensure it compiles without external dependencies.
+
+CONSTRAINTS
+- No third-party MVVM frameworks.
+- No external NuGet packages.
+- No unsafe credential storage. Do not implement credentials.
+- Keep UI functional and clean; do not over-style.
+
+Now generate the complete solution code.
