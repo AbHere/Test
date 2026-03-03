@@ -1,175 +1,132 @@
 <#
-Push-NuGetPackage.ps1
+Push-Me.ps1
 
-Use case:
-- You use nuget.exe (not dotnet).
-- Source URL and API key are hardcoded once in this script.
-- You only pass the package path (or optionally package id + version + folder).
-- Optional delete-before-push (requires Artifactory delete permission and a local repo).
+Run:
+  powershell -ExecutionPolicy Bypass -File .\Push-Me.ps1
 
-Edit these constants:
-  $NuGetExePath (optional; if empty it uses nuget.exe from PATH)
-  $ArtifactorySource
-  $ArtifactoryApiKey
-
-Examples:
-  .\Push-NuGetPackage.ps1 -PackagePath "C:\out\MyPkg.1.2.4.nupkg"
-  .\Push-NuGetPackage.ps1 -PackageId "MyPkg" -Version "1.2.4" -Folder "C:\out"
-  .\Push-NuGetPackage.ps1 -PackagePath "C:\out\MyPkg.1.2.3.nupkg" -DeleteFirst -ConfirmDelete
+Behavior:
+- Hardcoded Artifactory source + API key inside this script.
+- Prompts you for the full .nupkg path.
+- Asks whether to Push only, or Delete+Push.
+- Uses nuget.exe from PATH (or set $NuGetExePath).
+- Shows errors and pauses so the window doesn't close.
 #>
-
-[CmdletBinding()]
-param(
-  # Option A: full path to .nupkg
-  [Parameter(ParameterSetName = 'ByPath', Mandatory = $true)]
-  [ValidateNotNullOrEmpty()]
-  [string]$PackagePath,
-
-  # Option B: locate by id + version in a folder (so you can "give only the name")
-  [Parameter(ParameterSetName = 'ByIdVersion', Mandatory = $true)]
-  [ValidateNotNullOrEmpty()]
-  [string]$PackageId,
-
-  [Parameter(ParameterSetName = 'ByIdVersion', Mandatory = $true)]
-  [ValidateNotNullOrEmpty()]
-  [string]$Version,
-
-  [Parameter(ParameterSetName = 'ByIdVersion', Mandatory = $true)]
-  [ValidateNotNullOrEmpty()]
-  [string]$Folder,
-
-  # Optional: delete existing version first (dangerous; prefer version bump)
-  [switch]$DeleteFirst,
-
-  # Safety prompt for delete
-  [switch]$ConfirmDelete,
-
-  # Extra output
-  [switch]$VerboseLogs
-)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # =========================
-# EDIT THESE THREE SETTINGS
+# EDIT THESE SETTINGS
 # =========================
-
-# If you want a fixed nuget.exe path, set it here. Otherwise leave empty to use PATH.
-$NuGetExePath = ""  # e.g. "C:\Tools\nuget.exe"
-
-# Artifactory NuGet feed URL or the NuGet source name you configured.
-# Prefer the *local* repo endpoint for push/delete.
+$NuGetExePath      = ""  # leave empty to use nuget.exe from PATH. Or set e.g. "C:\Tools\nuget.exe"
 $ArtifactorySource = "https://<ARTIFACTORY_HOST>/artifactory/api/nuget/<REPO_KEY>"
-
-# Your Artifactory API key / token for nuget push/delete.
 $ArtifactoryApiKey = "<PASTE_YOUR_API_KEY_OR_TOKEN_HERE>"
+# =========================
 
-# =========================
-# END SETTINGS
-# =========================
+function Pause-OnExit([string]$Message = "Press any key to close...") {
+  Write-Host ""
+  Write-Host $Message -ForegroundColor Yellow
+  try { $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") } catch { Start-Sleep -Seconds 10 }
+}
 
 function Resolve-NuGetExe {
   if ([string]::IsNullOrWhiteSpace($NuGetExePath)) {
     $cmd = Get-Command 'nuget' -ErrorAction SilentlyContinue
-    if (-not $cmd) { throw "nuget.exe not found in PATH. Either add it to PATH or set `$NuGetExePath in the script." }
+    if (-not $cmd) { throw "nuget.exe not found in PATH. Add it to PATH or set `$NuGetExePath in the script." }
     return $cmd.Source
   }
-
   $p = (Resolve-Path -LiteralPath $NuGetExePath -ErrorAction Stop).Path
   if (-not (Test-Path -LiteralPath $p)) { throw "nuget.exe not found at: $p" }
   return $p
 }
 
-function Resolve-PackageFile {
-  if ($PSCmdlet.ParameterSetName -eq 'ByPath') {
-    $p = $PackagePath
-  } else {
-    $p = Join-Path -Path $Folder -ChildPath ("$PackageId.$Version.nupkg")
-  }
+function Get-PackageIdentityFromFileName([string]$PackagePath) {
+  # Best-effort: <id>.<version>.nupkg (version starts at first digit)
+  $name = [IO.Path]::GetFileName($PackagePath)
+  if (-not $name.ToLowerInvariant().EndsWith('.nupkg')) { return $null }
 
-  $full = (Resolve-Path -LiteralPath $p -ErrorAction Stop).Path
-  if (-not $full.ToLowerInvariant().EndsWith('.nupkg')) {
-    throw "PackagePath must point to a .nupkg file: $full"
-  }
-  return $full
-}
-
-function Get-PackageIdentityFromFileName {
-  param([Parameter(Mandatory = $true)][string]$Path)
-
-  # Best-effort parse: <id>.<version>.nupkg where version starts at first digit.
-  $name = [IO.Path]::GetFileName($Path)
   $base = $name.Substring(0, $name.Length - '.nupkg'.Length)
-
   $m = [regex]::Match($base, '^(?<id>.+?)\.(?<ver>\d+\..+)$')
   if (-not $m.Success) { return $null }
 
-  return @{
-    Id      = $m.Groups['id'].Value
-    Version = $m.Groups['ver'].Value
-  }
+  return @{ Id = $m.Groups['id'].Value; Version = $m.Groups['ver'].Value }
 }
 
-function Invoke-NuGet {
-  param(
-    [Parameter(Mandatory = $true)][string]$Exe,
-    [Parameter(Mandatory = $true)][string[]]$Args
-  )
-
-  if ($VerboseLogs) {
-    Write-Host "RUN: $Exe $($Args -join ' ')" -ForegroundColor Cyan
-  }
-
+function Invoke-NuGet([string]$Exe, [string[]]$Args) {
+  Write-Host "RUN: $Exe $($Args -join ' ')" -ForegroundColor Cyan
   $p = Start-Process -FilePath $Exe -ArgumentList $Args -NoNewWindow -Wait -PassThru
   if ($p.ExitCode -ne 0) {
-    throw "nuget.exe failed (exit $($p.ExitCode)): $Exe $($Args -join ' ')"
+    throw "nuget.exe failed (exit $($p.ExitCode))."
   }
 }
 
-# Basic validation of script configuration
-if ([string]::IsNullOrWhiteSpace($ArtifactorySource) -or $ArtifactorySource -match '<ARTIFACTORY_HOST>|<REPO_KEY>') {
-  throw "Edit `$ArtifactorySource in the script to your real Artifactory NuGet endpoint."
-}
-if ([string]::IsNullOrWhiteSpace($ArtifactoryApiKey) -or $ArtifactoryApiKey -match '<PASTE_YOUR_API_KEY_OR_TOKEN_HERE>') {
-  throw "Edit `$ArtifactoryApiKey in the script and paste your real API key/token."
-}
-
-$nugetExe = Resolve-NuGetExe
-$pkgPath  = Resolve-PackageFile
-
-# Optional delete
-if ($DeleteFirst) {
-  $ident = Get-PackageIdentityFromFileName -Path $pkgPath
-  if (-not $ident) {
-    throw "DeleteFirst requires filename format <id>.<version>.nupkg. Either rename the file or call the script with -PackageId/-Version/-Folder."
+try {
+  # Validate configuration
+  if ([string]::IsNullOrWhiteSpace($ArtifactorySource) -or $ArtifactorySource -match '<ARTIFACTORY_HOST>|<REPO_KEY>') {
+    throw "Edit `$ArtifactorySource in the script to your real Artifactory NuGet endpoint."
+  }
+  if ([string]::IsNullOrWhiteSpace($ArtifactoryApiKey) -or $ArtifactoryApiKey -match '<PASTE_YOUR_API_KEY_OR_TOKEN_HERE>') {
+    throw "Edit `$ArtifactoryApiKey in the script and paste your real API key/token."
   }
 
-  if ($ConfirmDelete) {
-    $ok = Read-Host "DELETE '$($ident.Id)' version '$($ident.Version)' from '$ArtifactorySource'? Type YES to proceed"
-    if ($ok -ne 'YES') { throw "Deletion cancelled." }
+  $nugetExe = Resolve-NuGetExe
+
+  # Prompt for package path (interactive)
+  $pkgInput = Read-Host "Enter full path to the .nupkg"
+  if ([string]::IsNullOrWhiteSpace($pkgInput)) { throw "No package path provided." }
+
+  $pkgPath = (Resolve-Path -LiteralPath $pkgInput -ErrorAction Stop).Path
+  if (-not $pkgPath.ToLowerInvariant().EndsWith('.nupkg')) { throw "Not a .nupkg file: $pkgPath" }
+
+  Write-Host "Package: $pkgPath"
+  Write-Host "Source:  $ArtifactorySource"
+
+  # Choose action
+  Write-Host ""
+  Write-Host "Choose action:"
+  Write-Host "  1) Push only (recommended)"
+  Write-Host "  2) Delete then Push (only if you have delete rights; breaks immutability)"
+  $choice = Read-Host "Enter 1 or 2"
+
+  if ($choice -eq '2') {
+    $ident = Get-PackageIdentityFromFileName -PackagePath $pkgPath
+    if (-not $ident) {
+      throw "Cannot infer PackageId/Version from filename. Rename to <id>.<version>.nupkg (e.g. MyPkg.1.2.3.nupkg) or use push-only."
+    }
+
+    $confirm = Read-Host "Type YES to delete '$($ident.Id)' version '$($ident.Version)' from Artifactory"
+    if ($confirm -ne 'YES') { throw "Deletion cancelled." }
+
+    $delArgs = @(
+      'delete', $ident.Id, $ident.Version,
+      '-Source', $ArtifactorySource,
+      '-ApiKey', $ArtifactoryApiKey,
+      '-NonInteractive',
+      '-Verbosity', 'detailed'
+    )
+    Invoke-NuGet -Exe $nugetExe -Args $delArgs
+  }
+  elseif ($choice -ne '1') {
+    throw "Invalid choice. Enter 1 or 2."
   }
 
-  $delArgs = @(
-    'delete', $ident.Id, $ident.Version,
+  $pushArgs = @(
+    'push', $pkgPath,
     '-Source', $ArtifactorySource,
     '-ApiKey', $ArtifactoryApiKey,
-    '-NonInteractive'
+    '-NonInteractive',
+    '-Verbosity', 'detailed'
   )
-  if ($VerboseLogs) { $delArgs += @('-Verbosity','detailed') }
+  Invoke-NuGet -Exe $nugetExe -Args $pushArgs
 
-  Invoke-NuGet -Exe $nugetExe -Args $delArgs
+  Write-Host ""
+  Write-Host "OK: pushed package." -ForegroundColor Green
+  Pause-OnExit
 }
-
-# Push
-$pushArgs = @(
-  'push', $pkgPath,
-  '-Source', $ArtifactorySource,
-  '-ApiKey', $ArtifactoryApiKey,
-  '-NonInteractive'
-)
-if ($VerboseLogs) { $pushArgs += @('-Verbosity','detailed') }
-
-Invoke-NuGet -Exe $nugetExe -Args $pushArgs
-
-Write-Host "OK: pushed $pkgPath to $ArtifactorySource"
+catch {
+  Write-Host ""
+  Write-Host "FAILED" -ForegroundColor Red
+  Write-Host $_.Exception.Message -ForegroundColor Red
+  Pause-OnExit
+  exit 1
+}
